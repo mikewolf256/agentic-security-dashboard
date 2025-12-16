@@ -1,0 +1,48 @@
+# Production Docker Compose
+# Usage: docker compose -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dashboard-prod
+    environment:
+      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN}
+      - MCP_SERVER_URL=${MCP_SERVER_URL:-http://mcp:8000}
+      - PORT=5050
+      - HOST=0.0.0.0
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - SECRET_KEY=${SECRET_KEY}
+    ports:
+      - "127.0.0.1:5050:5050"  # Bind to localhost only - use nginx reverse proxy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5050/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - agentic-prod
+
+networks:
+  agentic-prod:
+    name: agentic-prod
+    external: true
+

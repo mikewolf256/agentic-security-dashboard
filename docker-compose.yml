@@ -1,0 +1,32 @@
+# Local Development Docker Compose
+# Usage: docker compose up
+
+version: '3.8'
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dashboard-dev
+    environment:
+      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-dev-token-change-me}
+      - MCP_SERVER_URL=${MCP_SERVER_URL:-http://host.docker.internal:8000}
+      - PORT=5050
+      - HOST=0.0.0.0
+      - CORS_ORIGINS=*
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
+    ports:
+      - "5050:5050"
+    volumes:
+      # Mount source for hot-reload (optional, requires dev dependencies)
+      - ./app.py:/app/app.py:ro
+      - ./event_stream.py:/app/event_stream.py:ro
+    restart: unless-stopped
+    networks:
+      - dashboard-network
+
+networks:
+  dashboard-network:
+    driver: bridge
+
