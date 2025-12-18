@@ -127,6 +127,116 @@ DASHBOARD_HTML = """
             0%, 100% { opacity: 1; } 
             50% { opacity: 0.5; } 
         }
+        /* Executive Summary Styles */
+        .exec-summary {
+            background: linear-gradient(135deg, rgba(124, 92, 255, 0.1), rgba(34, 197, 94, 0.05));
+            border: 1px solid rgba(124, 92, 255, 0.3);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        .exec-summary h2 {
+            font-size: 1.1rem;
+            color: var(--muted);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .exec-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+        }
+        @media (max-width: 1000px) {
+            .exec-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 600px) {
+            .exec-grid { grid-template-columns: 1fr; }
+        }
+        .exec-card {
+            text-align: center;
+            padding: 16px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 12px;
+        }
+        .exec-card .label {
+            font-size: 0.8rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        .exec-card .value {
+            font-size: 2.5rem;
+            font-weight: 800;
+        }
+        .exec-card .subtext {
+            font-size: 0.85rem;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+        .exec-card.risk-none .value { color: var(--ok); }
+        .exec-card.risk-low .value { color: var(--accent); }
+        .exec-card.risk-medium .value { color: var(--warn); }
+        .exec-card.risk-high .value { color: var(--critical); }
+        .exec-progress {
+            margin-top: 20px;
+        }
+        .exec-progress-bar {
+            height: 12px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .exec-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--ok));
+            transition: width 0.5s ease;
+            border-radius: 6px;
+        }
+        .exec-progress-text {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 0.85rem;
+            color: var(--muted);
+        }
+        /* Toggle Button */
+        .view-toggle {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .toggle-btn {
+            background: var(--card);
+            border: 1px solid #1f2a3d;
+            color: var(--muted);
+            padding: 10px 24px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .toggle-btn:first-child { 
+            border-radius: 8px 0 0 8px; 
+        }
+        .toggle-btn:last-child { 
+            border-radius: 0 8px 8px 0; 
+        }
+        .toggle-btn.active {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+        .toggle-btn:hover:not(.active) {
+            background: rgba(124, 92, 255, 0.1);
+        }
+        .advanced-view {
+            display: none;
+        }
+        .advanced-view.visible {
+            display: block;
+        }
         .grid { 
             display: grid; 
             grid-template-columns: 1fr 1fr; 
@@ -400,6 +510,51 @@ DASHBOARD_HTML = """
             </div>
         </div>
         
+        <!-- Executive Summary (default view for leadership) -->
+        <div class="exec-summary" id="exec-summary">
+            <h2>📊 Executive Summary</h2>
+            <div class="exec-grid">
+                <div class="exec-card risk-none" id="exec-risk-card">
+                    <div class="label">Risk Level</div>
+                    <div class="value" id="exec-risk">—</div>
+                    <div class="subtext" id="exec-risk-text">Scan in progress</div>
+                </div>
+                <div class="exec-card">
+                    <div class="label">Confirmed Findings</div>
+                    <div class="value" style="color: var(--critical);" id="exec-confirmed">0</div>
+                    <div class="subtext">Validated vulnerabilities</div>
+                </div>
+                <div class="exec-card">
+                    <div class="label">Under Review</div>
+                    <div class="value" style="color: var(--warn);" id="exec-candidates">0</div>
+                    <div class="subtext">Candidates being validated</div>
+                </div>
+                <div class="exec-card">
+                    <div class="label">Endpoints Tested</div>
+                    <div class="value" style="color: var(--accent);" id="exec-endpoints">0</div>
+                    <div class="subtext" id="exec-phase">Initializing...</div>
+                </div>
+            </div>
+            <div class="exec-progress">
+                <div class="exec-progress-bar">
+                    <div class="exec-progress-fill" id="exec-progress-fill" style="width: 0%"></div>
+                </div>
+                <div class="exec-progress-text">
+                    <span id="exec-duration">0:00 elapsed</span>
+                    <span id="exec-progress-pct">0% complete</span>
+                    <span id="exec-eta">Calculating ETA...</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- View Toggle -->
+        <div class="view-toggle">
+            <button class="toggle-btn active" id="toggle-summary" onclick="showSummary()">Summary</button>
+            <button class="toggle-btn" id="toggle-advanced" onclick="showAdvanced()">Technical Details</button>
+        </div>
+        
+        <!-- Advanced View (hidden by default) -->
+        <div class="advanced-view" id="advanced-view">
         <div class="grid-3">
             <div class="card">
                 <h3>SCAN PROGRESS</h3>
@@ -448,13 +603,90 @@ DASHBOARD_HTML = """
                 </div>
             </div>
         </div>
+        </div><!-- end advanced-view -->
     </div>
 
     <script>
         let socket;
         let authenticated = false;
         let findingsCount = 0;
+        let candidatesCount = 0;
+        let confirmedCount = 0;
         const savedToken = localStorage.getItem('dashboard_token');
+        
+        // View toggle functions
+        function showSummary() {
+            document.getElementById('toggle-summary').classList.add('active');
+            document.getElementById('toggle-advanced').classList.remove('active');
+            document.getElementById('advanced-view').classList.remove('visible');
+        }
+        
+        function showAdvanced() {
+            document.getElementById('toggle-advanced').classList.add('active');
+            document.getElementById('toggle-summary').classList.remove('active');
+            document.getElementById('advanced-view').classList.add('visible');
+        }
+        
+        // Executive summary update
+        function updateExecSummary(stats) {
+            // Update confirmed vs candidates
+            const confirmed = stats.stats?.findings_validated || confirmedCount;
+            const candidates = stats.stats?.findings_candidates || candidatesCount;
+            
+            document.getElementById('exec-confirmed').textContent = confirmed;
+            document.getElementById('exec-candidates').textContent = candidates;
+            document.getElementById('exec-endpoints').textContent = stats.stats?.endpoints_found || 0;
+            
+            // Risk level based on confirmed findings
+            const riskCard = document.getElementById('exec-risk-card');
+            const riskEl = document.getElementById('exec-risk');
+            const riskText = document.getElementById('exec-risk-text');
+            
+            riskCard.className = 'exec-card';
+            if (confirmed === 0 && candidates === 0) {
+                riskCard.classList.add('risk-none');
+                riskEl.textContent = '—';
+                riskText.textContent = 'No issues found yet';
+            } else if (confirmed === 0) {
+                riskCard.classList.add('risk-low');
+                riskEl.textContent = 'LOW';
+                riskText.textContent = candidates + ' under review';
+            } else if (confirmed <= 2) {
+                riskCard.classList.add('risk-medium');
+                riskEl.textContent = 'MEDIUM';
+                riskText.textContent = confirmed + ' confirmed issue(s)';
+            } else {
+                riskCard.classList.add('risk-high');
+                riskEl.textContent = 'HIGH';
+                riskText.textContent = confirmed + ' confirmed issues';
+            }
+            
+            // Phase
+            if (stats.current_phase) {
+                document.getElementById('exec-phase').textContent = 'Phase: ' + stats.current_phase.toUpperCase();
+            }
+            
+            // Progress
+            const pct = stats.progress_percentage || 0;
+            document.getElementById('exec-progress-fill').style.width = pct + '%';
+            document.getElementById('exec-progress-pct').textContent = Math.round(pct) + '% complete';
+            
+            // Duration
+            if (stats.duration_seconds) {
+                const mins = Math.floor(stats.duration_seconds / 60);
+                const secs = Math.floor(stats.duration_seconds % 60);
+                document.getElementById('exec-duration').textContent = mins + ':' + secs.toString().padStart(2, '0') + ' elapsed';
+            }
+            
+            // ETA
+            if (stats.eta_seconds && stats.eta_seconds > 0) {
+                const etaMins = Math.floor(stats.eta_seconds / 60);
+                const etaSecs = Math.floor(stats.eta_seconds % 60);
+                document.getElementById('exec-eta').textContent = '~' + etaMins + ':' + etaSecs.toString().padStart(2, '0') + ' remaining';
+            } else if (pct >= 100) {
+                document.getElementById('exec-eta').textContent = 'Complete';
+            }
+        }
         
         // If we have a saved token, try to connect automatically
         if (savedToken) { 
@@ -530,7 +762,7 @@ DASHBOARD_HTML = """
             });
             
             socket.on('scan_event', (event) => { handleEvent(event); });
-            socket.on('stats_update', (stats) => { updateStats(stats); });
+            socket.on('stats_update', (stats) => { updateStats(stats); updateExecSummary(stats); });
             
             // Kill switch socket events
             socket.on('scan_registered', (data) => {
@@ -743,8 +975,12 @@ DASHBOARD_HTML = """
             // Original event handling...
             addEvent(event);
             
-            // Handle findings
-            if (event.event_type === 'finding_validated' || event.event_type === 'finding_candidate') {
+            // Handle findings - track candidates vs confirmed separately
+            if (event.event_type === 'finding_validated') {
+                confirmedCount++;
+                addFinding(event.data || {});
+            } else if (event.event_type === 'finding_candidate') {
+                candidatesCount++;
                 addFinding(event.data || {});
             }
             
@@ -753,7 +989,13 @@ DASHBOARD_HTML = """
                 document.getElementById('scan-target').textContent = event.data?.target || '-';
                 currentOrgId = event.data?.org_id || 'default';
                 findingsCount = 0;
+                candidatesCount = 0;
+                confirmedCount = 0;
                 document.getElementById('findings').innerHTML = '<div style="color: var(--muted); padding: 20px; text-align: center;">Waiting for findings...</div>';
+                // Reset exec summary
+                document.getElementById('exec-confirmed').textContent = '0';
+                document.getElementById('exec-candidates').textContent = '0';
+                document.getElementById('exec-endpoints').textContent = '0';
             }
             
             // Show phase

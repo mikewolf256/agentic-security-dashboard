@@ -98,6 +98,8 @@ class ScanEventStream:
             "endpoints_found": 0,
             "payloads_tested": 0,
             "findings_discovered": 0,
+            "findings_validated": 0,
+            "findings_candidates": 0,
         }
     
     def start_phase(self, phase: str, total_checks: Optional[int] = None):
@@ -223,12 +225,15 @@ class ScanEventStream:
             self._stats["payloads_tested"] += 1
         elif event_type == EventType.FINDING_VALIDATED:
             self._stats["findings_discovered"] += 1
+            self._stats["findings_validated"] += 1
             # Update OWASP coverage based on finding
             cwe = data.get("cwe") or data.get("cwe_id")
             if cwe:
                 owasp_category = self._map_cwe_to_owasp(cwe)
                 if owasp_category:
                     self.update_owasp_coverage(owasp_category, tested=True, count=1)
+        elif event_type == EventType.FINDING_CANDIDATE:
+            self._stats["findings_candidates"] += 1
         elif event_type == EventType.SCAN_START:
             self._current_scan_id = scan_id or data.get("scan_id", "default")
             self._scan_start_time = datetime.utcnow()
