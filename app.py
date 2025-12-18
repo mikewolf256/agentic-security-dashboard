@@ -438,7 +438,9 @@ DASHBOARD_HTML = """
         // Otherwise auth form is already visible (no display:none on it)
         
         function authenticate() {
+            console.log('[DEBUG] authenticate() called');
             const token = document.getElementById('token').value;
+            console.log('[DEBUG] Token value:', token ? '(has value)' : '(empty)');
             if (!token) {
                 showAuthError('Please enter a token');
                 return;
@@ -447,6 +449,7 @@ DASHBOARD_HTML = """
             btn.textContent = 'Connecting...';
             btn.disabled = true;
             hideAuthError();
+            console.log('[DEBUG] Calling tryConnect...');
             tryConnect(token);
         }
         
@@ -467,12 +470,15 @@ DASHBOARD_HTML = """
         }
         
         function tryConnect(token) {
+            console.log('[DEBUG] tryConnect called with token:', token ? '***' : 'empty');
             socket = io({ 
                 auth: { token: token },
                 transports: ['websocket', 'polling']
             });
+            console.log('[DEBUG] Socket created, waiting for events...');
             
             socket.on('connect', () => {
+                console.log('[DEBUG] CONNECTED! Socket ID:', socket.id);
                 authenticated = true;
                 localStorage.setItem('dashboard_token', token);
                 document.getElementById('auth').style.display = 'none';
@@ -483,6 +489,7 @@ DASHBOARD_HTML = """
             });
             
             socket.on('connect_error', (err) => {
+                console.log('[DEBUG] CONNECT ERROR:', err.message);
                 localStorage.removeItem('dashboard_token');
                 document.getElementById('auth').style.display = 'block';
                 document.getElementById('dashboard').style.display = 'none';
