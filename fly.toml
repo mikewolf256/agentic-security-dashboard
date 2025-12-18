@@ -10,7 +10,7 @@
 # Create persistent volume (first time only):
 #   fly volumes create agentic_data --size 1 --region ord
 
-app = "agentic-dashboard"
+app = "agentic-security-dashboard"
 primary_region = "ord"
 
 [build]

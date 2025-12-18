@@ -5,7 +5,7 @@
 
 set -e
 
-APP_NAME="agentic-dashboard"
+APP_NAME="agentic-security-dashboard"
 REGION="ord"  # Chicago - change as needed
 
 show_help() {

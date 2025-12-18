@@ -13,7 +13,7 @@ help:
 	@echo "  make publish    - Build and tag for production registry"
 
 build:
-	docker build -t agentic-dashboard:latest .
+	docker build -t agentic-security-dashboard:latest .
 
 dev:
 	docker compose up
@@ -26,7 +26,7 @@ stop:
 	docker compose -f docker-compose.prod.yml down
 
 clean: stop
-	docker rmi agentic-dashboard:latest || true
+	docker rmi agentic-security-dashboard:latest || true
 
 test:
 	@echo "Running tests..."
@@ -36,9 +36,9 @@ publish: build
 	@echo "Tagging for production..."
 	@read -p "Enter registry URL (e.g., registry.example.com): " registry; \
 	read -p "Enter version tag (e.g., v1.0.0): " version; \
-	docker tag agentic-dashboard:latest $$registry/agentic-dashboard:$$version; \
-	docker tag agentic-dashboard:latest $$registry/agentic-dashboard:latest; \
-	echo "Tagged: $$registry/agentic-dashboard:$$version"; \
-	echo "Tagged: $$registry/agentic-dashboard:latest"; \
-	echo "Push with: docker push $$registry/agentic-dashboard:$$version"
+	docker tag agentic-security-dashboard:latest $$registry/agentic-security-dashboard:$$version; \
+	docker tag agentic-security-dashboard:latest $$registry/agentic-security-dashboard:latest; \
+	echo "Tagged: $$registry/agentic-security-dashboard:$$version"; \
+	echo "Tagged: $$registry/agentic-security-dashboard:latest"; \
+	echo "Push with: docker push $$registry/agentic-security-dashboard:$$version"
 

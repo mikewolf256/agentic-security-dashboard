@@ -95,7 +95,7 @@ fly secrets set SECRET_KEY=$(openssl rand -hex 32)
 fly deploy
 ```
 
-Your dashboard will be at: `https://agentic-dashboard.fly.dev`
+Your dashboard will be at: `https://agentic-security-dashboard.fly.dev`
 
 ### Self-Hosted Production
 

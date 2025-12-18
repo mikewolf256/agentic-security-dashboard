@@ -37,6 +37,9 @@ except ImportError:
     get_storage = None
 
 app = Flask(__name__)
+STARTED_AT = datetime.utcnow().isoformat()
+APP_VERSION = os.getenv('APP_VERSION', os.getenv('FLY_IMAGE_REF', 'unknown'))
+
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(24).hex())
 socketio = SocketIO(
     app,
@@ -788,7 +791,15 @@ def dashboard():
 @app.route('/health')
 def health():
     """Health check endpoint."""
-    return jsonify({'status': 'healthy', 'service': 'live-dashboard'})
+    return jsonify({
+        'status': 'healthy',
+        'service': 'live-dashboard',
+        'started_at': STARTED_AT,
+        'version': APP_VERSION,
+        'fly_app': os.getenv('FLY_APP_NAME'),
+        'fly_region': os.getenv('FLY_REGION'),
+        'hostname': os.getenv('HOSTNAME'),
+    })
 
 
 @app.route('/api/stats')
