@@ -13,6 +13,7 @@ Features:
 - Live statistics display
 - Scan progress and phase tracking
 - Tech stack fingerprint display
+- Persistent storage (SQLite for Fly.io, in-memory for dev)
 """
 
 import os
@@ -28,6 +29,12 @@ try:
     from scan_event_stream import get_event_stream, ScanEvent, EventType
 except ImportError:
     from event_stream import get_event_stream, ScanEvent, EventType
+
+# Import storage backend
+try:
+    from storage import get_storage
+except ImportError:
+    get_storage = None
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(24).hex())
@@ -46,8 +53,24 @@ KILL_SIGNAL_DIR = Path(os.getenv('KILL_SIGNAL_DIR', '/tmp/agentic-scan-signals')
 # Ensure signal directory exists
 KILL_SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
 
+# Initialize storage backend
+storage = None
+if get_storage:
+    try:
+        storage = get_storage()
+        print(f"[Dashboard] Storage backend initialized: {type(storage).__name__}")
+    except Exception as e:
+        print(f"[Dashboard] Storage init failed, using in-memory: {e}")
+
 # Active scans tracking (org_id -> scan_info)
+# Falls back to in-memory if storage not available
 active_scans = {}
+if storage:
+    try:
+        active_scans = storage.get_active_scans()
+        print(f"[Dashboard] Loaded {len(active_scans)} active scans from storage")
+    except Exception as e:
+        print(f"[Dashboard] Failed to load scans from storage: {e}")
 
 # HTML template - embedded for single-file simplicity
 DASHBOARD_HTML = """
@@ -784,7 +807,100 @@ def get_events():
     if token != DASHBOARD_TOKEN:
         abort(401)
     count = request.args.get('count', 50, type=int)
+    scan_id = request.args.get('scan_id')
+    
+    # Try storage first for historical data
+    if storage and scan_id:
+        try:
+            return jsonify(storage.get_events(scan_id=scan_id, limit=count))
+        except Exception as e:
+            print(f"[Dashboard] Storage query failed: {e}")
+    
     return jsonify(get_event_stream().get_recent_events(count))
+
+
+@app.route('/api/scans')
+def get_scans():
+    """Get scan history from storage."""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if token != DASHBOARD_TOKEN:
+        abort(401)
+    
+    limit = request.args.get('limit', 50, type=int)
+    status = request.args.get('status')
+    
+    if storage:
+        try:
+            scans = storage.list_scans(limit=limit, status=status)
+            return jsonify({'status': 'ok', 'scans': scans, 'count': len(scans)})
+        except Exception as e:
+            print(f"[Dashboard] Failed to list scans: {e}")
+    
+    # Fallback to in-memory active scans
+    return jsonify({'status': 'ok', 'scans': list(active_scans.values()), 'count': len(active_scans)})
+
+
+@app.route('/api/scans/<scan_id>')
+def get_scan_detail(scan_id):
+    """Get detailed information for a specific scan."""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if token != DASHBOARD_TOKEN:
+        abort(401)
+    
+    if storage:
+        try:
+            scan = storage.get_scan(scan_id)
+            if scan:
+                # Include findings
+                findings = storage.get_findings(scan_id=scan_id, limit=100)
+                events = storage.get_events(scan_id=scan_id, limit=50)
+                return jsonify({
+                    'status': 'ok',
+                    'scan': scan,
+                    'findings': findings,
+                    'events': events
+                })
+        except Exception as e:
+            print(f"[Dashboard] Failed to get scan detail: {e}")
+    
+    return jsonify({'status': 'not_found', 'scan_id': scan_id}), 404
+
+
+@app.route('/api/findings')
+def get_findings():
+    """Get findings from storage."""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if token != DASHBOARD_TOKEN:
+        abort(401)
+    
+    limit = request.args.get('limit', 100, type=int)
+    scan_id = request.args.get('scan_id')
+    
+    if storage:
+        try:
+            findings = storage.get_findings(scan_id=scan_id, limit=limit)
+            return jsonify({'status': 'ok', 'findings': findings, 'count': len(findings)})
+        except Exception as e:
+            print(f"[Dashboard] Failed to get findings: {e}")
+    
+    return jsonify({'status': 'ok', 'findings': [], 'count': 0})
+
+
+@app.route('/api/dashboard-stats')
+def get_dashboard_stats():
+    """Get aggregated dashboard statistics from storage."""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if token != DASHBOARD_TOKEN:
+        abort(401)
+    
+    if storage:
+        try:
+            stats = storage.get_stats()
+            return jsonify({'status': 'ok', 'stats': stats})
+        except Exception as e:
+            print(f"[Dashboard] Failed to get stats: {e}")
+    
+    return jsonify({'status': 'ok', 'stats': {}})
 
 
 @app.route('/api/event', methods=['POST'])
@@ -817,9 +933,30 @@ def post_event():
     # Create and emit event
     stream = get_event_stream()
     event = stream.emit(event_type, payload)
+    event_dict = event.to_dict()
+    
+    # Persist to storage
+    if storage:
+        try:
+            storage.save_event(event_dict)
+            
+            # Save findings separately for easier querying
+            if event_type in (EventType.FINDING_VALIDATED, EventType.FINDING_CANDIDATE):
+                finding_data = {
+                    'scan_id': event.scan_id,
+                    'title': payload.get('title', 'Unknown'),
+                    'severity': payload.get('severity', 'medium'),
+                    'status': 'validated' if event_type == EventType.FINDING_VALIDATED else 'candidate',
+                    'cwe': payload.get('cwe', ''),
+                    'endpoint': payload.get('endpoint', payload.get('url', '')),
+                    **payload
+                }
+                storage.save_finding(finding_data)
+        except Exception as e:
+            print(f"[Dashboard] Failed to persist event: {e}")
     
     # Broadcast to all connected WebSocket clients
-    socketio.emit('scan_event', event.to_dict())
+    socketio.emit('scan_event', event_dict)
     socketio.emit('stats_update', stream.get_stats())
     
     return jsonify({'status': 'ok', 'event_id': event.event_id})
@@ -844,13 +981,23 @@ def register_scan():
     pid = data.get('pid')
     target = data.get('target', 'Unknown')
     
-    active_scans[org_id] = {
+    scan_data = {
         'scan_id': scan_id,
+        'org_id': org_id,
         'pid': pid,
         'target': target,
         'started_at': datetime.now().isoformat(),
         'status': 'running'
     }
+    
+    active_scans[org_id] = scan_data
+    
+    # Persist to storage
+    if storage:
+        try:
+            storage.save_scan(scan_id, scan_data)
+        except Exception as e:
+            print(f"[Dashboard] Failed to persist scan: {e}")
     
     # Broadcast scan start
     socketio.emit('scan_registered', {'org_id': org_id, 'scan': active_scans[org_id]})
@@ -887,6 +1034,15 @@ def kill_scan():
     if org_id in active_scans:
         active_scans[org_id]['status'] = 'killing'
         active_scans[org_id]['kill_reason'] = reason
+        
+        # Persist to storage
+        if storage:
+            try:
+                scan_id = active_scans[org_id].get('scan_id')
+                if scan_id:
+                    storage.mark_scan_complete(scan_id, status='killed')
+            except Exception as e:
+                print(f"[Dashboard] Failed to update scan status: {e}")
     
     # Broadcast kill event
     socketio.emit('scan_killed', {

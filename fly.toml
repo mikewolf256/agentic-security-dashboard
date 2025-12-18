@@ -1,0 +1,62 @@
+# Agentic Security Dashboard - Fly.io Configuration
+# =================================================
+# Deploy: fly launch --copy-config --no-deploy
+# Then:   fly deploy
+#
+# Set secrets:
+#   fly secrets set DASHBOARD_TOKEN=your-secure-token
+#   fly secrets set SECRET_KEY=$(openssl rand -hex 32)
+#
+# Create persistent volume (first time only):
+#   fly volumes create agentic_data --size 1 --region ord
+
+app = "agentic-dashboard"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  PORT = "8080"
+  HOST = "0.0.0.0"
+  STORAGE_BACKEND = "sqlite"
+  SQLITE_PATH = "/data/dashboard.db"
+  # Allow connections from anywhere (handled by Fly.io proxy)
+  CORS_ORIGINS = "*"
+
+[mounts]
+  source = "agentic_data"
+  destination = "/data"
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 250
+    soft_limit = 200
+
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "5s"
+    path = "/health"
+    method = "GET"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+
