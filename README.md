@@ -1,224 +1,170 @@
-# Agentic Security Dashboard
+# Agentic Security - Live Scan Dashboard
 
-Real-time scan monitoring dashboard for Agentic Security Partners. Built with Flask-SocketIO for live WebSocket event streaming.
+Real-time streaming dashboard for monitoring active security scans. This is a lightweight WebSocket-based dashboard that provides live visibility into scan progress.
+
+**For full vulnerability management, findings are exported to per-client [Faraday](https://github.com/infobyte/faraday) instances.**
 
 ## Features
 
-- 🔴 **Real-time Event Streaming** - Live WebSocket updates for scan progress
-- 📊 **Live Statistics** - Requests, endpoints, payloads, findings
-- 🔍 **Findings Display** - Real-time vulnerability discoveries with RAG context
-- 🔐 **Token Authentication** - Simple token-based access control
-- 🐳 **Docker Support** - Full containerization for dev and production
+- Real-time WebSocket event streaming
+- Token-based authentication
+- Live scan statistics (requests, endpoints, payloads, findings)
+- Scan progress with phase indicators and ETA
+- Tech stack fingerprint display
+- Live findings feed during scan
+
+## Architecture
+
+```
+┌─────────────────┐     WebSocket      ┌─────────────────┐
+│ Agentic Runner  │ ──────────────────►│  Live Dashboard │
+│                 │   POST /api/event  │  (this service) │
+└─────────────────┘                    └─────────────────┘
+        │                                      │
+        │ findings.json                        │ real-time view
+        ▼                                      ▼
+┌─────────────────┐                    ┌─────────────────┐
+│ Faraday Export  │                    │  Client Browser │
+│                 │                    │                 │
+└─────────────────┘                    └─────────────────┘
+        │
+        │ REST API
+        ▼
+┌─────────────────┐
+│ Faraday Instance│
+│ (vuln mgmt)     │
+└─────────────────┘
+```
 
 ## Quick Start
 
 ### Local Development
 
-1. **Clone and setup:**
-```bash
-git clone <repo-url>
-cd agentic-security-dashboard
-cp .env.example .env
-# Edit .env with your DASHBOARD_TOKEN
-```
-
-2. **Run with Docker Compose:**
-```bash
-docker compose up
-```
-
-3. **Access dashboard:**
-- Open http://localhost:5050
-- Enter your `DASHBOARD_TOKEN` when prompted
-
-### Production Deployment
-
-1. **Build production image:**
-```bash
-docker build -t agentic-dashboard:latest .
-```
-
-2. **Deploy with docker-compose:**
 ```bash
 # Set environment variables
-export DASHBOARD_TOKEN="your-production-token"
-export MCP_SERVER_URL="http://mcp:8000"
+export DASHBOARD_TOKEN=your-secure-token
 
-# Deploy
-docker compose -f docker-compose.prod.yml up -d
-```
+# Run with Docker Compose
+docker compose up
 
-3. **Or integrate into main docker-compose.prod.yml:**
-```yaml
-services:
-  dashboard:
-    build:
-      context: ./agentic-security-dashboard
-      dockerfile: Dockerfile
-    environment:
-      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN}
-      - MCP_SERVER_URL=http://mcp:8000
-    ports:
-      - "127.0.0.1:5050:5050"
-    networks:
-      - agentic-prod
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────────┐
-│         Client Browser                   │
-│    (WebSocket Connection)                │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│      Dashboard (Flask-SocketIO)         │
-│      Port: 5050                          │
-│      - WebSocket server                  │
-│      - Event broadcasting                │
-│      - Token authentication              │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│      MCP Server (FastAPI)               │
-│      Port: 8000                          │
-│      - Scan orchestration                │
-│      - Event emission                    │
-└─────────────────────────────────────────┘
-```
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DASHBOARD_TOKEN` | Authentication token (required) | `changeme` |
-| `MCP_SERVER_URL` | MCP server URL | `http://mcp:8000` |
-| `PORT` | Dashboard port | `5050` |
-| `HOST` | Bind address | `0.0.0.0` |
-| `CORS_ORIGINS` | Allowed CORS origins | `*` |
-| `SECRET_KEY` | Flask secret key | Auto-generated |
-
-## API Endpoints
-
-### WebSocket
-- **Connection:** `ws://localhost:5050`
-- **Auth:** Token via `auth.token` in connection
-- **Events:**
-  - `scan_event` - Real-time scan events
-  - `stats_update` - Statistics updates
-
-### HTTP REST
-- `GET /` - Dashboard HTML
-- `GET /health` - Health check
-- `GET /api/stats` - Get statistics (requires `Authorization: Bearer <token>`)
-- `GET /api/events` - Get recent events (requires `Authorization: Bearer <token>`)
-- `POST /api/event` - Post new event (requires `Authorization: Bearer <token>`)
-
-## Event Types
-
-The dashboard supports these event types:
-
-- `scan_start` - Scan initiated
-- `scan_progress` - Scan progress update
-- `scan_complete` - Scan finished
-- `scan_error` - Scan error
-- `endpoint_discovered` - New endpoint found
-- `tech_fingerprint` - Technology detected
-- `payload_sent` - Test payload sent
-- `finding_candidate` - Potential vulnerability
-- `finding_validated` - Confirmed vulnerability
-- `rag_match` - RAG context match
-
-## Development
-
-### Local Development (without Docker)
-
-```bash
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
+# Or run directly
 pip install -r requirements.txt
-
-# Run
-export DASHBOARD_TOKEN=dev-token
 python app.py
 ```
 
-### Building Docker Image
+Access at: http://localhost:5050
+
+### Production
 
 ```bash
-# Build
-docker build -t agentic-dashboard:latest .
+# Build and run
+docker compose -f docker-compose.prod.yml up -d
 
-# Test locally
-docker run -p 5050:5050 \
-  -e DASHBOARD_TOKEN=test-token \
-  agentic-dashboard:latest
+# Or integrate with main agentic-bugbounty deployment
 ```
 
-### Publishing Production Image
+## Configuration
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `DASHBOARD_TOKEN` | Authentication token | `changeme` |
+| `PORT` | Server port | `5050` |
+| `HOST` | Bind address | `0.0.0.0` |
+| `CORS_ORIGINS` | Allowed origins | `*` |
+| `SECRET_KEY` | Flask secret key | (random) |
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Dashboard HTML page |
+| `/health` | GET | Health check |
+| `/api/stats` | GET | Current scan statistics |
+| `/api/events` | GET | Recent events (auth required) |
+| `/api/event` | POST | Push new event (auth required) |
+
+### Pushing Events
+
+The scanner pushes events to the dashboard via POST:
 
 ```bash
-# Tag for registry
-docker tag agentic-dashboard:latest \
-  registry.example.com/agentic-dashboard:v1.0.0
-
-# Push
-docker push registry.example.com/agentic-dashboard:v1.0.0
+curl -X POST http://localhost:5050/api/event \
+  -H "Authorization: Bearer $DASHBOARD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_type": "finding_validated",
+    "payload": {
+      "title": "XSS in search parameter",
+      "severity": "high",
+      "cwe": "CWE-79"
+    }
+  }'
 ```
 
-## Integration with Main Project
+### Event Types
 
-To integrate this dashboard into the main `agentic-bugbounty` project:
+| Event Type | Description |
+|------------|-------------|
+| `scan_start` | Scan initiated |
+| `scan_complete` | Scan finished |
+| `phase_start` | New phase (recon, scanning, validation) |
+| `endpoint_discovered` | New endpoint found |
+| `tech_fingerprint` | Technology detected |
+| `payload_sent` | Test payload sent |
+| `finding_candidate` | Potential finding |
+| `finding_validated` | Confirmed finding |
+| `rag_match` | Similar vuln from RAG |
 
-1. **Add to docker-compose.prod.yml:**
-```yaml
-services:
-  dashboard:
-    build:
-      context: ../agentic-security-dashboard
-      dockerfile: Dockerfile
-    environment:
-      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN}
-      - MCP_SERVER_URL=http://mcp:8000
-    ports:
-      - "127.0.0.1:5050:5050"
-    networks:
-      - agentic-prod
+## WebSocket Events
+
+Connect via Socket.IO with token authentication:
+
+```javascript
+const socket = io({
+    auth: { token: 'your-token' },
+    transports: ['websocket', 'polling']
+});
+
+socket.on('scan_event', (event) => {
+    console.log('Event:', event);
+});
+
+socket.on('stats_update', (stats) => {
+    console.log('Stats:', stats);
+});
 ```
 
-2. **Update MCP server to emit events:**
-The MCP server should POST events to `http://dashboard:5050/api/event` with the dashboard token.
+## Integration with Faraday
 
-## Security Notes
+This dashboard is for **real-time monitoring only**. After scan completion, findings are automatically exported to the client's Faraday instance for:
 
-- **Token Authentication:** Always use strong, random tokens in production
-- **Network Binding:** Production binds to `127.0.0.1` - use nginx reverse proxy
-- **CORS:** Configure `CORS_ORIGINS` to restrict origins in production
-- **HTTPS:** Use nginx/cloudflare for HTTPS termination
+- Long-term vulnerability tracking
+- Remediation workflow
+- Collaboration with client teams
+- Professional reports
+- Historical trend analysis
 
-## Troubleshooting
+See [infra/faraday/README.md](../agentic-bugbounty/infra/faraday/README.md) in the main project for Faraday setup.
 
-### Dashboard not connecting
-- Check `DASHBOARD_TOKEN` matches between client and server
-- Verify WebSocket connection (check browser console)
-- Ensure CORS is configured correctly
+## Files
 
-### Events not appearing
-- Verify MCP server is posting to `/api/event` endpoint
-- Check dashboard logs: `docker logs dashboard-prod`
-- Verify network connectivity between services
+| File | Description |
+|------|-------------|
+| `app.py` | Main Flask-SocketIO application |
+| `event_stream.py` | Event handling and statistics |
+| `Dockerfile` | Container build definition |
+| `docker-compose.yml` | Local development setup |
+| `docker-compose.prod.yml` | Production deployment |
 
-### High memory usage
-- Adjust `max_events` in `event_stream.py` (default: 100)
-- Events are kept in memory only (no persistence)
+## Development
 
-## License
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
-MIT License © 2025 Agentic Security Partners
+# Run with hot reload
+FLASK_DEBUG=1 python app.py
 
+# Run tests
+pytest tests/
+```

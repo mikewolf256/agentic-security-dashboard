@@ -949,19 +949,30 @@ def clear_kill_signal():
 @socketio.on('connect')
 def handle_connect(auth=None):
     """Handle WebSocket connection with token auth."""
+    # Debug: log what we receive
+    print(f"[DEBUG] Connect attempt - auth={auth}, args={dict(request.args)}", flush=True)
+    
     token = request.args.get('token') or (auth.get('token') if auth else None)
+    print(f"[DEBUG] Extracted token={token!r}, expected={DASHBOARD_TOKEN!r}", flush=True)
+    
     if token != DASHBOARD_TOKEN:
+        print(f"[DEBUG] Token mismatch - rejecting connection", flush=True)
         return False  # Reject connection
     
-    # Send current stats on connect
-    emit('stats_update', get_event_stream().get_stats())
+    print(f"[DEBUG] Token valid - accepting connection", flush=True)
     
-    # Send active scans
-    emit('active_scans', active_scans)
-    
-    # Send recent events
-    for event in get_event_stream().get_recent_events(20):
-        emit('scan_event', event.to_dict())
+    try:
+        # Send current stats on connect
+        emit('stats_update', get_event_stream().get_stats())
+        
+        # Send active scans
+        emit('active_scans', active_scans)
+        
+        # Send recent events
+        for event in get_event_stream().get_recent_events(20):
+            emit('scan_event', event.to_dict())
+    except Exception as e:
+        print(f"[DEBUG] Error in connect handler: {e}", flush=True)
 
 
 def broadcast_event(event: ScanEvent):
