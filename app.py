@@ -22,7 +22,7 @@ import signal
 from pathlib import Path
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, abort
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room, leave_room, rooms
 
 # Import event stream
 try:
@@ -1594,8 +1594,16 @@ def post_event():
         except Exception as e:
             print(f"[Dashboard] Failed to persist event: {e}")
     
-    # Broadcast to all connected WebSocket clients
-    socketio.emit('scan_event', event_dict)
+    # Multi-tenant: Broadcast to appropriate room(s)
+    client_id = payload.get('client_id') or data.get('client_id')
+    
+    if client_id:
+        # Emit to client-specific room
+        socketio.emit('scan_event', event_dict, room=f"client_{client_id}")
+    
+    # Always emit to admin and legacy rooms
+    socketio.emit('scan_event', event_dict, room="admin")
+    socketio.emit('scan_event', event_dict, room="all")
     socketio.emit('stats_update', stream.get_stats())
     
     return jsonify({'status': 'ok', 'event_id': event.event_id})
@@ -1619,6 +1627,7 @@ def register_scan():
     scan_id = data.get('scan_id', f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     pid = data.get('pid')
     target = data.get('target', 'Unknown')
+    client_id = data.get('client_id')  # Multi-tenant support
     
     scan_data = {
         'scan_id': scan_id,
@@ -1626,7 +1635,8 @@ def register_scan():
         'pid': pid,
         'target': target,
         'started_at': datetime.now().isoformat(),
-        'status': 'running'
+        'status': 'running',
+        'client_id': client_id,  # Multi-tenant
     }
     
     active_scans[org_id] = scan_data
@@ -1638,8 +1648,12 @@ def register_scan():
         except Exception as e:
             print(f"[Dashboard] Failed to persist scan: {e}")
     
-    # Broadcast scan start
-    socketio.emit('scan_registered', {'org_id': org_id, 'scan': active_scans[org_id]})
+    # Multi-tenant: Broadcast scan start to appropriate rooms
+    emit_data = {'org_id': org_id, 'scan': active_scans[org_id]}
+    if client_id:
+        socketio.emit('scan_registered', emit_data, room=f"client_{client_id}")
+    socketio.emit('scan_registered', emit_data, room="admin")
+    socketio.emit('scan_registered', emit_data, room="all")
     
     return jsonify({'status': 'ok', 'scan_id': scan_id, 'org_id': org_id})
 
@@ -1683,21 +1697,33 @@ def kill_scan():
             except Exception as e:
                 print(f"[Dashboard] Failed to update scan status: {e}")
     
-    # Broadcast kill event
-    socketio.emit('scan_killed', {
+    # Get client_id for room routing
+    client_id = active_scans.get(org_id, {}).get('client_id')
+    
+    # Broadcast kill event to appropriate rooms
+    kill_event_data = {
         'org_id': org_id,
         'reason': reason,
         'message': f'Kill signal sent for {org_id}'
-    })
+    }
+    if client_id:
+        socketio.emit('scan_killed', kill_event_data, room=f"client_{client_id}")
+    socketio.emit('scan_killed', kill_event_data, room="admin")
+    socketio.emit('scan_killed', kill_event_data, room="all")
     
     # Also emit as scan event for the event stream
     stream = get_event_stream()
     event = stream.emit(EventType.SCAN_COMPLETE, {
         'status': 'killed',
         'reason': reason,
-        'org_id': org_id
+        'org_id': org_id,
+        'client_id': client_id
     })
-    socketio.emit('scan_event', event.to_dict())
+    event_dict = event.to_dict()
+    if client_id:
+        socketio.emit('scan_event', event_dict, room=f"client_{client_id}")
+    socketio.emit('scan_event', event_dict, room="admin")
+    socketio.emit('scan_event', event_dict, room="all")
     
     return jsonify({
         'status': 'ok',
@@ -1750,7 +1776,13 @@ def clear_kill_signal():
 
 @socketio.on('connect')
 def handle_connect(auth=None):
-    """Handle WebSocket connection with token auth."""
+    """Handle WebSocket connection with token auth and room assignment.
+    
+    Multi-tenant support:
+    - client_id param: Join client-specific room for isolated events
+    - admin param: Join 'admin' room to see all events
+    - No client_id: Legacy mode, see all events (backward compatible)
+    """
     # Debug: log what we receive
     print(f"[DEBUG] Connect attempt - auth={auth}, args={dict(request.args)}", flush=True)
     
@@ -1763,24 +1795,74 @@ def handle_connect(auth=None):
     
     print(f"[DEBUG] Token valid - accepting connection", flush=True)
     
+    # Multi-tenant: Join appropriate room(s)
+    client_id = request.args.get('client_id') or (auth.get('client_id') if auth else None)
+    is_admin = request.args.get('admin') == 'true' or (auth.get('admin') if auth else False)
+    
+    if client_id:
+        # Client-specific room
+        join_room(f"client_{client_id}")
+        print(f"[DEBUG] Joined room: client_{client_id}", flush=True)
+    
+    if is_admin:
+        # Admin room sees all events
+        join_room("admin")
+        print(f"[DEBUG] Joined room: admin", flush=True)
+    
+    if not client_id and not is_admin:
+        # Legacy mode: join 'all' room for backward compatibility
+        join_room("all")
+        print(f"[DEBUG] Joined room: all (legacy mode)", flush=True)
+    
     try:
         # Send current stats on connect
         emit('stats_update', get_event_stream().get_stats())
         
-        # Send active scans
-        emit('active_scans', active_scans)
+        # Send active scans (filtered by client_id if provided)
+        if client_id:
+            client_scans = {k: v for k, v in active_scans.items() 
+                          if v.get('client_id') == client_id}
+            emit('active_scans', client_scans)
+        else:
+            emit('active_scans', active_scans)
         
-        # Send recent events
+        # Send recent events (filtered by client_id if provided)
         for event in get_event_stream().get_recent_events(20):
-            emit('scan_event', event.to_dict())
+            event_dict = event.to_dict()
+            if client_id:
+                # Only send events for this client
+                if event_dict.get('client_id') == client_id:
+                    emit('scan_event', event_dict)
+            else:
+                emit('scan_event', event_dict)
     except Exception as e:
         print(f"[DEBUG] Error in connect handler: {e}", flush=True)
 
 
 def broadcast_event(event: ScanEvent):
-    """Broadcast an event to all connected clients."""
-    socketio.emit('scan_event', event.to_dict())
-    socketio.emit('stats_update', get_event_stream().get_stats())
+    """Broadcast an event to appropriate room(s).
+    
+    Multi-tenant routing:
+    - If event has client_id, emit to client_{client_id} room
+    - Always emit to 'admin' room (admins see all)
+    - Always emit to 'all' room (legacy mode clients)
+    """
+    event_dict = event.to_dict()
+    client_id = event_dict.get('client_id')
+    
+    # Emit to client-specific room if client_id present
+    if client_id:
+        socketio.emit('scan_event', event_dict, room=f"client_{client_id}")
+    
+    # Always emit to admin room
+    socketio.emit('scan_event', event_dict, room="admin")
+    
+    # Always emit to 'all' room for legacy clients
+    socketio.emit('scan_event', event_dict, room="all")
+    
+    # Broadcast stats to everyone
+    stats = get_event_stream().get_stats()
+    socketio.emit('stats_update', stats)
 
 
 def setup_event_broadcasting():
