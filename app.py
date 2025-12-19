@@ -472,6 +472,175 @@ DASHBOARD_HTML = """
             background: var(--critical);
             color: white;
         }
+        /* Endpoints List Styles */
+        .endpoints-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .endpoint-item {
+            padding: 10px 12px;
+            border-bottom: 1px solid #1f2a3d;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: background 0.2s ease;
+        }
+        .endpoint-item:hover {
+            background: rgba(124, 92, 255, 0.1);
+        }
+        .endpoint-item .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .endpoint-item .status-indicator.discovered { background: var(--muted); }
+        .endpoint-item .status-indicator.tested { background: var(--accent); }
+        .endpoint-item .status-indicator.vulnerable { background: var(--critical); animation: pulse 1.5s infinite; }
+        .endpoint-item .status-indicator.clean { background: var(--ok); }
+        .endpoint-item .endpoint-url {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.85rem;
+        }
+        .endpoint-item .endpoint-method {
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            color: var(--muted);
+        }
+        .endpoint-item .findings-badge {
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            background: var(--critical);
+            border-radius: 10px;
+            color: white;
+        }
+        /* Endpoint Modal Styles */
+        .endpoint-modal {
+            position: fixed;
+            top: 0;
+            right: -500px;
+            width: 500px;
+            height: 100vh;
+            background: var(--card);
+            border-left: 1px solid #1f2a3d;
+            z-index: 1000;
+            transition: right 0.3s ease;
+            display: flex;
+            flex-direction: column;
+        }
+        .endpoint-modal.active {
+            right: 0;
+        }
+        .endpoint-modal-header {
+            padding: 20px;
+            border-bottom: 1px solid #1f2a3d;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .endpoint-modal-header h2 {
+            font-size: 1.1rem;
+            margin: 0;
+        }
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--muted);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+        }
+        .close-btn:hover { color: var(--text); }
+        .endpoint-modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        .endpoint-info {
+            margin-bottom: 20px;
+        }
+        .endpoint-info .endpoint-url {
+            font-size: 1rem;
+            word-break: break-all;
+            margin-bottom: 10px;
+            color: var(--accent);
+        }
+        .endpoint-meta {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .endpoint-method {
+            font-size: 0.75rem;
+            padding: 3px 8px;
+            background: rgba(59, 130, 246, 0.2);
+            border-radius: 4px;
+            color: #3b82f6;
+            font-weight: 600;
+        }
+        .endpoint-status-badge {
+            font-size: 0.75rem;
+            padding: 3px 10px;
+            border-radius: 12px;
+            text-transform: uppercase;
+        }
+        .endpoint-status-badge.discovered { background: rgba(169, 180, 199, 0.2); color: var(--muted); }
+        .endpoint-status-badge.tested { background: rgba(124, 92, 255, 0.2); color: var(--accent); }
+        .endpoint-status-badge.vulnerable { background: rgba(239, 68, 68, 0.2); color: var(--critical); }
+        .endpoint-status-badge.clean { background: rgba(34, 197, 94, 0.2); color: var(--ok); }
+        .endpoint-findings h4 {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+        }
+        .modal-finding {
+            padding: 12px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 3px solid var(--critical);
+        }
+        .modal-finding.candidate { border-color: var(--warn); }
+        .modal-finding.validated { border-color: var(--critical); }
+        .modal-finding .finding-title {
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .modal-finding .finding-meta {
+            font-size: 0.8rem;
+            color: var(--muted);
+            display: flex;
+            gap: 10px;
+        }
+        .modal-finding .severity {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+        }
+        .modal-finding .severity.critical { background: rgba(239, 68, 68, 0.2); color: var(--critical); }
+        .modal-finding .severity.high { background: rgba(245, 158, 11, 0.2); color: var(--warn); }
+        .modal-finding .severity.medium { background: rgba(124, 92, 255, 0.2); color: var(--accent); }
+        .modal-finding .severity.low { background: rgba(169, 180, 199, 0.2); color: var(--muted); }
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+            display: none;
+        }
+        .modal-overlay.active { display: block; }
     </style>
 </head>
 <body>
@@ -588,8 +757,12 @@ DASHBOARD_HTML = """
         
         <div class="grid">
             <div class="card">
-                <h3>LIVE EVENT STREAM</h3>
-                <div class="events" id="events"></div>
+                <h3>ENDPOINTS <span id="endpoints-count" style="color: var(--muted); font-weight: normal;">(0)</span></h3>
+                <div class="endpoints-list" id="endpoints-list">
+                    <div style="color: var(--muted); padding: 20px; text-align: center;">
+                        Discovering endpoints...
+                    </div>
+                </div>
             </div>
             <div class="card">
                 <h3>LIVE FINDINGS</h3>
@@ -603,7 +776,39 @@ DASHBOARD_HTML = """
                 </div>
             </div>
         </div>
+        
+        <!-- Live Event Stream (collapsible) -->
+        <div class="card" style="margin-bottom: 20px;">
+            <h3 style="cursor: pointer;" onclick="toggleEventStream()">
+                LIVE EVENT STREAM <span id="event-stream-toggle">▼</span>
+            </h3>
+            <div class="events" id="events" style="display: none;"></div>
+        </div>
         </div><!-- end advanced-view -->
+        
+        <!-- Endpoint Detail Modal -->
+        <div class="endpoint-modal" id="endpoint-modal">
+            <div class="endpoint-modal-content">
+                <div class="endpoint-modal-header">
+                    <h2 id="endpoint-modal-title">Endpoint Details</h2>
+                    <button class="close-btn" onclick="closeEndpointModal()">&times;</button>
+                </div>
+                <div class="endpoint-modal-body">
+                    <div class="endpoint-info">
+                        <div class="endpoint-url" id="modal-endpoint-url"></div>
+                        <div class="endpoint-meta">
+                            <span class="endpoint-method" id="modal-endpoint-method">GET</span>
+                            <span class="endpoint-status-badge" id="modal-endpoint-status">discovered</span>
+                            <span id="modal-endpoint-payloads" style="color: var(--muted);"></span>
+                        </div>
+                    </div>
+                    <div class="endpoint-findings" id="modal-endpoint-findings">
+                        <h4>Findings</h4>
+                        <div id="modal-findings-list">No findings for this endpoint</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -837,6 +1042,105 @@ DASHBOARD_HTML = """
             container.appendChild(tag);
         }
         
+        // Endpoint management
+        let endpointsData = {};
+        let eventStreamVisible = false;
+        
+        function toggleEventStream() {
+            const events = document.getElementById('events');
+            const toggle = document.getElementById('event-stream-toggle');
+            eventStreamVisible = !eventStreamVisible;
+            events.style.display = eventStreamVisible ? 'block' : 'none';
+            toggle.textContent = eventStreamVisible ? '▲' : '▼';
+        }
+        
+        function updateEndpointsList(endpoints) {
+            const container = document.getElementById('endpoints-list');
+            const countEl = document.getElementById('endpoints-count');
+            
+            if (!endpoints || endpoints.length === 0) {
+                return;
+            }
+            
+            countEl.textContent = `(${endpoints.length})`;
+            
+            // Store endpoints data for modal
+            endpoints.forEach(ep => {
+                endpointsData[ep.url] = ep;
+            });
+            
+            // Render list
+            container.innerHTML = endpoints.map(ep => {
+                const findingsCount = ep.findings?.length || 0;
+                const findingsBadge = findingsCount > 0 
+                    ? `<span class="findings-badge">${findingsCount}</span>` 
+                    : '';
+                const urlPath = ep.url.replace(/^https?:\/\/[^\/]+/, '') || '/';
+                return `
+                    <div class="endpoint-item" onclick="openEndpointModal('${escapeHtml(ep.url)}')">
+                        <span class="status-indicator ${ep.status}"></span>
+                        <span class="endpoint-url" title="${escapeHtml(ep.url)}">${escapeHtml(urlPath)}</span>
+                        <span class="endpoint-method">${ep.method || 'GET'}</span>
+                        ${findingsBadge}
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function openEndpointModal(url) {
+            const modal = document.getElementById('endpoint-modal');
+            const ep = endpointsData[url];
+            
+            if (!ep) {
+                console.error('Endpoint not found:', url);
+                return;
+            }
+            
+            // Populate modal
+            document.getElementById('modal-endpoint-url').textContent = ep.url;
+            document.getElementById('modal-endpoint-method').textContent = ep.method || 'GET';
+            
+            const statusBadge = document.getElementById('modal-endpoint-status');
+            statusBadge.textContent = ep.status;
+            statusBadge.className = 'endpoint-status-badge ' + ep.status;
+            
+            document.getElementById('modal-endpoint-payloads').textContent = 
+                ep.payloads_tested > 0 ? `${ep.payloads_tested} payloads tested` : '';
+            
+            // Render findings
+            const findingsContainer = document.getElementById('modal-findings-list');
+            if (ep.findings && ep.findings.length > 0) {
+                findingsContainer.innerHTML = ep.findings.map(f => `
+                    <div class="modal-finding ${f.status}">
+                        <div class="finding-title">${escapeHtml(f.title || 'Unknown')}</div>
+                        <div class="finding-meta">
+                            <span class="severity ${f.severity?.toLowerCase() || 'medium'}">${f.severity || 'Medium'}</span>
+                            <span>${f.status === 'validated' ? '✅ Validated' : '⏳ Candidate'}</span>
+                            ${f.cwe ? `<span>${f.cwe}</span>` : ''}
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                findingsContainer.innerHTML = '<div style="color: var(--muted); padding: 10px;">No findings for this endpoint</div>';
+            }
+            
+            modal.classList.add('active');
+            
+            // Add overlay click handler
+            document.body.insertAdjacentHTML('beforeend', '<div class="modal-overlay active" onclick="closeEndpointModal()"></div>');
+        }
+        
+        function closeEndpointModal() {
+            document.getElementById('endpoint-modal').classList.remove('active');
+            const overlay = document.querySelector('.modal-overlay');
+            if (overlay) overlay.remove();
+        }
+        
+        // Close modal on escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeEndpointModal();
+        });
+        
         function updateStats(stats) {
             document.getElementById('stat-requests').textContent = stats.stats?.requests_sent || 0;
             document.getElementById('stat-endpoints').textContent = stats.stats?.endpoints_found || 0;
@@ -874,6 +1178,11 @@ DASHBOARD_HTML = """
                 for (const tech of Object.keys(stats.tech_stack)) {
                     addTechTag(tech);
                 }
+            }
+            
+            // Update endpoints list
+            if (stats.endpoints_with_status) {
+                updateEndpointsList(stats.endpoints_with_status);
             }
         }
         
@@ -991,7 +1300,10 @@ DASHBOARD_HTML = """
                 findingsCount = 0;
                 candidatesCount = 0;
                 confirmedCount = 0;
+                endpointsData = {};  // Reset endpoints
                 document.getElementById('findings').innerHTML = '<div style="color: var(--muted); padding: 20px; text-align: center;">Waiting for findings...</div>';
+                document.getElementById('endpoints-list').innerHTML = '<div style="color: var(--muted); padding: 20px; text-align: center;">Discovering endpoints...</div>';
+                document.getElementById('endpoints-count').textContent = '(0)';
                 // Reset exec summary
                 document.getElementById('exec-confirmed').textContent = '0';
                 document.getElementById('exec-candidates').textContent = '0';
@@ -1008,6 +1320,39 @@ DASHBOARD_HTML = """
             // Update tech stack
             if (event.event_type === 'tech_fingerprint') {
                 addTechTag(event.data?.technology || event.data?.tech);
+            }
+            
+            // Track endpoint discoveries in real-time
+            if (event.event_type === 'endpoint_discovered') {
+                const url = event.data?.url || event.data?.endpoint;
+                if (url && !endpointsData[url]) {
+                    endpointsData[url] = {
+                        url: url,
+                        method: event.data?.method || 'GET',
+                        status: 'discovered',
+                        findings: [],
+                        payloads_tested: 0,
+                        discovered_at: event.timestamp
+                    };
+                    // Update endpoints list with new data
+                    updateEndpointsList(Object.values(endpointsData).slice(-50));
+                }
+            }
+            
+            // Track findings associated with endpoints
+            if ((event.event_type === 'finding_validated' || event.event_type === 'finding_candidate') 
+                && (event.data?.endpoint || event.data?.url)) {
+                const url = event.data?.endpoint || event.data?.url;
+                if (endpointsData[url]) {
+                    endpointsData[url].status = 'vulnerable';
+                    endpointsData[url].findings.push({
+                        title: event.data?.title || 'Unknown',
+                        severity: event.data?.severity || 'medium',
+                        status: event.event_type === 'finding_validated' ? 'validated' : 'candidate',
+                        cwe: event.data?.cwe
+                    });
+                    updateEndpointsList(Object.values(endpointsData).slice(-50));
+                }
             }
             
             // Show Faraday link on scan complete
@@ -1154,6 +1499,47 @@ def get_dashboard_stats():
             print(f"[Dashboard] Failed to get stats: {e}")
     
     return jsonify({'status': 'ok', 'stats': {}})
+
+
+@app.route('/api/endpoints')
+def get_endpoints():
+    """Get all endpoints with their status and findings count."""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if token != DASHBOARD_TOKEN:
+        abort(401)
+    
+    limit = request.args.get('limit', 100, type=int)
+    stream = get_event_stream()
+    endpoints = stream.get_all_endpoints(limit=limit)
+    
+    return jsonify({
+        'status': 'ok',
+        'endpoints': endpoints,
+        'count': len(endpoints)
+    })
+
+
+@app.route('/api/endpoints/<path:endpoint_url>')
+def get_endpoint_detail(endpoint_url):
+    """Get detailed info for a specific endpoint including findings."""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if token != DASHBOARD_TOKEN:
+        abort(401)
+    
+    # URL decode the endpoint
+    from urllib.parse import unquote
+    endpoint_url = unquote(endpoint_url)
+    
+    stream = get_event_stream()
+    endpoint = stream.get_endpoint_details(endpoint_url)
+    
+    if endpoint:
+        return jsonify({
+            'status': 'ok',
+            'endpoint': endpoint
+        })
+    
+    return jsonify({'status': 'not_found', 'endpoint_url': endpoint_url}), 404
 
 
 @app.route('/api/event', methods=['POST'])

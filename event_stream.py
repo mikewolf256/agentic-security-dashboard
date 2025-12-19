@@ -93,6 +93,7 @@ class ScanEventStream:
         self._tech_stack: Dict[str, Any] = {}
         self._owasp_coverage: Dict[str, Dict[str, Any]] = {}  # A01-A10 -> {tested: bool, count: int}
         self._endpoints: List[Dict[str, Any]] = []  # Recent endpoints
+        self._endpoint_map: Dict[str, Dict[str, Any]] = {}  # URL -> endpoint details with findings
         self._stats: Dict[str, int] = {
             "requests_sent": 0,
             "endpoints_found": 0,
@@ -184,15 +185,76 @@ class ScanEventStream:
     
     def add_endpoint(self, endpoint: str, method: Optional[str] = None, status_code: Optional[int] = None):
         """Add a discovered endpoint."""
+        now = datetime.utcnow().isoformat()
         endpoint_data = {
             "endpoint": endpoint,
             "method": method,
             "status_code": status_code,
-            "discovered_at": datetime.utcnow().isoformat()
+            "discovered_at": now
         }
         self._endpoints.insert(0, endpoint_data)
         if len(self._endpoints) > 100:  # Keep last 100
             self._endpoints.pop()
+        
+        # Also track in endpoint_map for detailed view
+        endpoint_key = self._normalize_endpoint(endpoint)
+        if endpoint_key not in self._endpoint_map:
+            self._endpoint_map[endpoint_key] = {
+                "url": endpoint,
+                "method": method or "GET",
+                "status_code": status_code,
+                "discovered_at": now,
+                "status": "discovered",  # discovered -> tested -> clean/vulnerable
+                "findings": [],
+                "payloads_tested": 0,
+                "last_tested_at": None,
+            }
+    
+    def _normalize_endpoint(self, url: str) -> str:
+        """Normalize endpoint URL for consistent keying."""
+        # Remove trailing slashes, normalize to lowercase domain
+        url = url.rstrip("/")
+        # Keep path case-sensitive but normalize protocol/domain
+        if "://" in url:
+            parts = url.split("://", 1)
+            if "/" in parts[1]:
+                domain, path = parts[1].split("/", 1)
+                return f"{parts[0]}://{domain.lower()}/{path}"
+            return f"{parts[0]}://{parts[1].lower()}"
+        return url.lower()
+    
+    def add_finding_to_endpoint(self, endpoint: str, finding: Dict[str, Any]):
+        """Associate a finding with an endpoint."""
+        endpoint_key = self._normalize_endpoint(endpoint)
+        if endpoint_key in self._endpoint_map:
+            self._endpoint_map[endpoint_key]["findings"].append(finding)
+            self._endpoint_map[endpoint_key]["status"] = "vulnerable"
+            self._endpoint_map[endpoint_key]["last_tested_at"] = datetime.utcnow().isoformat()
+    
+    def mark_endpoint_tested(self, endpoint: str):
+        """Mark an endpoint as tested (payloads sent)."""
+        endpoint_key = self._normalize_endpoint(endpoint)
+        if endpoint_key in self._endpoint_map:
+            ep = self._endpoint_map[endpoint_key]
+            ep["payloads_tested"] += 1
+            ep["last_tested_at"] = datetime.utcnow().isoformat()
+            if ep["status"] == "discovered":
+                ep["status"] = "tested"
+    
+    def get_endpoint_details(self, endpoint: str) -> Optional[Dict[str, Any]]:
+        """Get detailed info for a specific endpoint."""
+        endpoint_key = self._normalize_endpoint(endpoint)
+        return self._endpoint_map.get(endpoint_key)
+    
+    def get_all_endpoints(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get all tracked endpoints with their status."""
+        endpoints = list(self._endpoint_map.values())
+        # Sort by: vulnerable first, then by discovery time
+        endpoints.sort(key=lambda e: (
+            0 if e["status"] == "vulnerable" else 1,
+            e.get("discovered_at", "")
+        ), reverse=True)
+        return endpoints[:limit]
     
     def emit(self, event_type: EventType, data: Dict[str, Any], scan_id: Optional[str] = None) -> ScanEvent:
         """Emit a new event."""
@@ -223,6 +285,10 @@ class ScanEventStream:
                 self.add_endpoint(endpoint, data.get("method"), data.get("status_code"))
         elif event_type == EventType.PAYLOAD_SENT:
             self._stats["payloads_tested"] += 1
+            # Track which endpoint was tested
+            endpoint = data.get("endpoint") or data.get("url") or data.get("target")
+            if endpoint:
+                self.mark_endpoint_tested(endpoint)
         elif event_type == EventType.FINDING_VALIDATED:
             self._stats["findings_discovered"] += 1
             self._stats["findings_validated"] += 1
@@ -232,8 +298,32 @@ class ScanEventStream:
                 owasp_category = self._map_cwe_to_owasp(cwe)
                 if owasp_category:
                     self.update_owasp_coverage(owasp_category, tested=True, count=1)
+            # Associate finding with endpoint
+            endpoint = data.get("endpoint") or data.get("url")
+            if endpoint:
+                finding_data = {
+                    "title": data.get("title", "Unknown"),
+                    "severity": data.get("severity", "medium"),
+                    "status": "validated",
+                    "cwe": cwe,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    **{k: v for k, v in data.items() if k not in ("endpoint", "url")}
+                }
+                self.add_finding_to_endpoint(endpoint, finding_data)
         elif event_type == EventType.FINDING_CANDIDATE:
             self._stats["findings_candidates"] += 1
+            # Associate candidate finding with endpoint
+            endpoint = data.get("endpoint") or data.get("url")
+            if endpoint:
+                finding_data = {
+                    "title": data.get("title", "Unknown"),
+                    "severity": data.get("severity", "medium"),
+                    "status": "candidate",
+                    "cwe": data.get("cwe") or data.get("cwe_id"),
+                    "timestamp": datetime.utcnow().isoformat(),
+                    **{k: v for k, v in data.items() if k not in ("endpoint", "url")}
+                }
+                self.add_finding_to_endpoint(endpoint, finding_data)
         elif event_type == EventType.SCAN_START:
             self._current_scan_id = scan_id or data.get("scan_id", "default")
             self._scan_start_time = datetime.utcnow()
@@ -242,6 +332,7 @@ class ScanEventStream:
             self._tech_stack = {}
             self._owasp_coverage = {}
             self._endpoints = []
+            self._endpoint_map = {}  # Reset endpoint tracking
         elif event_type == EventType.TECH_FINGERPRINT:
             # Update tech stack directly (don't call add_tech_fingerprint to avoid recursion)
             tech = data.get("technology") or data.get("tech")
@@ -251,6 +342,36 @@ class ScanEventStream:
                     "confidence": data.get("confidence"),
                     "detected_at": datetime.utcnow().isoformat()
                 }
+        elif event_type == EventType.SCAN_PROGRESS or event_type == EventType.PROGRESS_UPDATE:
+            # Update progress from scan_progress events
+            if "progress" in data:
+                self._progress_percentage = float(data["progress"])
+            elif "progress_percentage" in data:
+                self._progress_percentage = float(data["progress_percentage"])
+            elif "percentage" in data:
+                self._progress_percentage = float(data["percentage"])
+            # Update completed/total if provided
+            if "completed" in data:
+                self._completed_checks = int(data["completed"])
+            if "total" in data:
+                self._total_checks = int(data["total"])
+        elif event_type == EventType.PHASE_START:
+            # Update current phase
+            phase = data.get("phase")
+            if phase:
+                self._current_phase = phase
+                self._phase_start_time = datetime.utcnow()
+            # Also update progress if phase includes progress info
+            if "progress_percentage" in data:
+                self._progress_percentage = float(data["progress_percentage"])
+        elif event_type == EventType.PHASE_COMPLETE:
+            # Clear phase or mark complete
+            if data.get("phase") == self._current_phase:
+                self._phase_start_time = None
+        elif event_type == EventType.SCAN_COMPLETE:
+            # Mark scan as complete
+            self._progress_percentage = 100.0
+            self._current_phase = "complete"
         
         # Notify listeners
         for listener in self._listeners:
@@ -321,6 +442,7 @@ class ScanEventStream:
             "tech_stack": self._tech_stack.copy(),
             "owasp_coverage": self._owasp_coverage.copy(),
             "recent_endpoints": self._endpoints[:10],  # Last 10 endpoints
+            "endpoints_with_status": self.get_all_endpoints(20),  # Top 20 endpoints with status
         }
 
 
