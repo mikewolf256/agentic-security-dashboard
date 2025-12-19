@@ -1376,11 +1376,647 @@ DASHBOARD_HTML = """
 </html>
 """
 
+# Admin Dashboard HTML - Multi-client view
+ADMIN_DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>Agentic Security - Admin Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        :root { 
+            --bg: #0a0e14; 
+            --card: #0f1419; 
+            --text: #e9eef7; 
+            --accent: #22d3ee;
+            --accent2: #a855f7;
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --danger: #ef4444;
+            --border: #1e293b;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            background: var(--bg); 
+            color: var(--text); 
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, var(--card) 0%, #1a1f2e 100%);
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header-badge {
+            background: var(--accent2);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: var(--accent);
+        }
+        .stat-label {
+            color: #64748b;
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+        }
+        .section-title {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .clients-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .client-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .client-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .client-header {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            padding: 1rem 1.25rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+        }
+        .client-name {
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+        .client-badge {
+            background: var(--accent);
+            color: #0a0e14;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .client-scans {
+            padding: 1rem 1.25rem;
+        }
+        .scan-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            background: #0a0e14;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+        }
+        .scan-target {
+            font-size: 0.875rem;
+            color: var(--text);
+        }
+        .scan-status {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+        .scan-status.running {
+            background: rgba(34, 211, 238, 0.2);
+            color: var(--accent);
+        }
+        .scan-status.completed {
+            background: rgba(74, 222, 128, 0.2);
+            color: var(--success);
+        }
+        .scan-status.failed {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--danger);
+        }
+        .client-actions {
+            padding: 1rem 1.25rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 0.5rem;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: #0a0e14;
+        }
+        .btn-primary:hover {
+            background: #06b6d4;
+        }
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+        .btn-secondary:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--danger);
+            border: 1px solid var(--danger);
+        }
+        .btn-danger:hover {
+            background: var(--danger);
+            color: white;
+        }
+        .all-scans {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .all-scans-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .scans-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .scans-table th,
+        .scans-table td {
+            padding: 1rem 1.25rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        .scans-table th {
+            background: #0a0e14;
+            color: #64748b;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .scans-table tr:hover td {
+            background: rgba(34, 211, 238, 0.05);
+        }
+        .no-data {
+            text-align: center;
+            padding: 3rem;
+            color: #64748b;
+        }
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem;
+            color: #64748b;
+        }
+        .loading::after {
+            content: '';
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--accent);
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 0.5rem;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .footer {
+            text-align: center;
+            padding: 2rem;
+            color: #64748b;
+            font-size: 0.875rem;
+        }
+        .footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔐 Agentic Security Admin</h1>
+        <span class="header-badge">Multi-Tenant Control</span>
+    </div>
+    
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="totalClients">-</div>
+                <div class="stat-label">Active Clients</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalScans">-</div>
+                <div class="stat-label">Running Scans</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalFindings">-</div>
+                <div class="stat-label">Total Findings</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="uptime">-</div>
+                <div class="stat-label">Uptime</div>
+            </div>
+        </div>
+        
+        <h2 class="section-title">📊 Clients Overview</h2>
+        <div class="clients-grid" id="clientsGrid">
+            <div class="loading">Loading clients...</div>
+        </div>
+        
+        <h2 class="section-title">🔄 All Active Scans</h2>
+        <div class="all-scans">
+            <table class="scans-table">
+                <thead>
+                    <tr>
+                        <th>Client</th>
+                        <th>Target</th>
+                        <th>Status</th>
+                        <th>Started</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="scansTableBody">
+                    <tr><td colspan="5" class="loading">Loading scans...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <div class="footer">
+        <a href="/">← Back to Dashboard</a> | 
+        Admin Dashboard v1.0
+    </div>
+    
+    <script>
+        const TOKEN = new URLSearchParams(window.location.search).get('token') || '';
+        const API_BASE = '';
+        
+        async function fetchWithAuth(url) {
+            const res = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${TOKEN}` }
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+        }
+        
+        async function loadClients() {
+            try {
+                const data = await fetchWithAuth('/api/admin/clients');
+                document.getElementById('totalClients').textContent = data.total_clients;
+                document.getElementById('totalScans').textContent = data.total_scans;
+                
+                const grid = document.getElementById('clientsGrid');
+                if (data.clients.length === 0) {
+                    grid.innerHTML = '<div class="no-data">No active clients</div>';
+                    return;
+                }
+                
+                grid.innerHTML = data.clients.map(client => `
+                    <div class="client-card">
+                        <div class="client-header">
+                            <span class="client-name">${escapeHtml(client.client_id)}</span>
+                            <span class="client-badge">${client.active_scans} scans</span>
+                        </div>
+                        <div class="client-scans">
+                            ${client.scans.map(scan => `
+                                <div class="scan-item">
+                                    <span class="scan-target">${escapeHtml(scan.target || 'Unknown')}</span>
+                                    <span class="scan-status ${scan.status || 'running'}">${scan.status || 'running'}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                        <div class="client-actions">
+                            <button class="btn btn-primary" onclick="viewClient('${client.client_id}')">View Dashboard</button>
+                            <button class="btn btn-secondary" onclick="killClientScans('${client.client_id}')">Kill All</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                document.getElementById('clientsGrid').innerHTML = 
+                    `<div class="no-data">Error loading clients: ${e.message}</div>`;
+            }
+        }
+        
+        async function loadAllScans() {
+            try {
+                const data = await fetchWithAuth('/api/admin/all-scans');
+                const tbody = document.getElementById('scansTableBody');
+                
+                if (data.scans.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="no-data">No active scans</td></tr>';
+                    return;
+                }
+                
+                tbody.innerHTML = data.scans.map(scan => `
+                    <tr>
+                        <td>${escapeHtml(scan.client_id)}</td>
+                        <td>${escapeHtml(scan.target || 'Unknown')}</td>
+                        <td><span class="scan-status ${scan.status || 'running'}">${scan.status || 'running'}</span></td>
+                        <td>${formatTime(scan.started_at)}</td>
+                        <td>
+                            <button class="btn btn-danger" onclick="killScan('${scan.org_id}')">Kill</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                document.getElementById('scansTableBody').innerHTML = 
+                    `<tr><td colspan="5" class="no-data">Error: ${e.message}</td></tr>`;
+            }
+        }
+        
+        async function loadStats() {
+            try {
+                const data = await fetchWithAuth('/api/stats');
+                document.getElementById('totalFindings').textContent = 
+                    (data.critical || 0) + (data.high || 0) + (data.medium || 0) + (data.low || 0);
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        }
+        
+        function viewClient(clientId) {
+            // Get client-scoped token and redirect
+            fetchWithAuth(`/api/admin/switch-client/${clientId}`)
+                .then(data => {
+                    window.open(data.dashboard_url, '_blank');
+                })
+                .catch(e => alert('Failed to switch client: ' + e.message));
+        }
+        
+        async function killScan(orgId) {
+            if (!confirm('Kill this scan?')) return;
+            try {
+                await fetch('/api/scan/kill', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${TOKEN}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ org_id: orgId, reason: 'Admin kill' })
+                });
+                loadAllScans();
+                loadClients();
+            } catch (e) {
+                alert('Failed to kill scan: ' + e.message);
+            }
+        }
+        
+        async function killClientScans(clientId) {
+            if (!confirm(`Kill all scans for ${clientId}?`)) return;
+            // Kill all scans for this client
+            try {
+                const data = await fetchWithAuth('/api/admin/all-scans');
+                const clientScans = data.scans.filter(s => s.client_id === clientId);
+                for (const scan of clientScans) {
+                    await fetch('/api/scan/kill', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${TOKEN}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ org_id: scan.org_id, reason: 'Admin bulk kill' })
+                    });
+                }
+                loadAllScans();
+                loadClients();
+            } catch (e) {
+                alert('Failed: ' + e.message);
+            }
+        }
+        
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>"']/g, m => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[m]);
+        }
+        
+        function formatTime(iso) {
+            if (!iso) return '-';
+            const d = new Date(iso);
+            return d.toLocaleTimeString();
+        }
+        
+        function updateUptime() {
+            fetch('/health')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.started_at) {
+                        const start = new Date(data.started_at);
+                        const now = new Date();
+                        const diff = Math.floor((now - start) / 1000);
+                        const hours = Math.floor(diff / 3600);
+                        const mins = Math.floor((diff % 3600) / 60);
+                        document.getElementById('uptime').textContent = `${hours}h ${mins}m`;
+                    }
+                });
+        }
+        
+        // Initial load
+        loadClients();
+        loadAllScans();
+        loadStats();
+        updateUptime();
+        
+        // Refresh every 10 seconds
+        setInterval(() => {
+            loadClients();
+            loadAllScans();
+            loadStats();
+        }, 10000);
+        
+        setInterval(updateUptime, 60000);
+    </script>
+</body>
+</html>
+"""
+
 
 @app.route('/')
 def dashboard():
     """Serve the dashboard HTML."""
     return render_template_string(DASHBOARD_HTML)
+
+
+@app.route('/admin')
+def admin_dashboard():
+    """Serve the admin dashboard HTML."""
+    return render_template_string(ADMIN_DASHBOARD_HTML)
+
+
+@app.route('/api/admin/clients')
+def list_clients():
+    """List all clients with their scan counts.
+    
+    Requires admin JWT or DASHBOARD_TOKEN.
+    """
+    # Check auth
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    is_admin = False
+    
+    if JWT_AUTH_AVAILABLE:
+        try:
+            claims = get_jwt_auth().validate_token(token)
+            if claims and claims.is_admin:
+                is_admin = True
+        except:
+            pass
+    
+    if not is_admin and token != DASHBOARD_TOKEN:
+        abort(401, 'Admin access required')
+    
+    # Group scans by client_id
+    clients = {}
+    for org_id, scan in active_scans.items():
+        client_id = scan.get('client_id') or 'default'
+        if client_id not in clients:
+            clients[client_id] = {
+                'client_id': client_id,
+                'active_scans': 0,
+                'scans': [],
+            }
+        clients[client_id]['active_scans'] += 1
+        clients[client_id]['scans'].append({
+            'org_id': org_id,
+            'scan_id': scan.get('scan_id'),
+            'target': scan.get('target'),
+            'status': scan.get('status'),
+            'started_at': scan.get('started_at'),
+        })
+    
+    return jsonify({
+        'clients': list(clients.values()),
+        'total_clients': len(clients),
+        'total_scans': len(active_scans),
+    })
+
+
+@app.route('/api/admin/all-scans')
+def list_all_scans():
+    """List all active scans across all clients.
+    
+    Requires admin JWT or DASHBOARD_TOKEN.
+    """
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    is_admin = False
+    
+    if JWT_AUTH_AVAILABLE:
+        try:
+            claims = get_jwt_auth().validate_token(token)
+            if claims and claims.is_admin:
+                is_admin = True
+        except:
+            pass
+    
+    if not is_admin and token != DASHBOARD_TOKEN:
+        abort(401, 'Admin access required')
+    
+    scans = []
+    for org_id, scan in active_scans.items():
+        scans.append({
+            'org_id': org_id,
+            'client_id': scan.get('client_id') or 'default',
+            'scan_id': scan.get('scan_id'),
+            'target': scan.get('target'),
+            'status': scan.get('status'),
+            'started_at': scan.get('started_at'),
+            'pid': scan.get('pid'),
+        })
+    
+    # Sort by started_at descending
+    scans.sort(key=lambda x: x.get('started_at', ''), reverse=True)
+    
+    return jsonify({
+        'scans': scans,
+        'total': len(scans),
+    })
+
+
+@app.route('/api/admin/switch-client/<client_id>')
+def switch_to_client(client_id: str):
+    """Get a client-scoped JWT token for viewing their dashboard.
+    
+    Allows admin to impersonate a client's view.
+    Requires admin JWT or DASHBOARD_TOKEN.
+    """
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    is_admin = False
+    
+    if JWT_AUTH_AVAILABLE:
+        try:
+            claims = get_jwt_auth().validate_token(token)
+            if claims and claims.is_admin:
+                is_admin = True
+        except:
+            pass
+    
+    if not is_admin and token != DASHBOARD_TOKEN:
+        abort(401, 'Admin access required')
+    
+    if not JWT_AUTH_AVAILABLE:
+        abort(501, 'JWT auth not available')
+    
+    # Generate a client-scoped viewer token
+    auth = get_jwt_auth()
+    from datetime import timedelta
+    client_token = auth.create_token(
+        client_id=client_id,
+        role='viewer',
+        expires_in=timedelta(hours=2),
+    )
+    
+    return jsonify({
+        'client_id': client_id,
+        'token': client_token,
+        'dashboard_url': f"/?token={client_token}",
+    })
 
 
 @app.route('/health')
