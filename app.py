@@ -1878,6 +1878,469 @@ ADMIN_DASHBOARD_HTML = """
 </html>
 """
 
+# Client Self-Service Portal HTML
+CLIENT_PORTAL_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>Agentic Security - Client Portal</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        :root { 
+            --bg: #0a0e14; 
+            --card: #0f1419; 
+            --text: #e9eef7; 
+            --accent: #10b981;
+            --accent2: #06b6d4;
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --danger: #ef4444;
+            --border: #1e293b;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            background: var(--bg); 
+            color: var(--text); 
+            font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, var(--card) 0%, #1a1f2e 100%);
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        .header h1 span {
+            color: var(--accent);
+        }
+        .client-badge {
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .welcome-card {
+            background: linear-gradient(135deg, #10b98120 0%, #06b6d420 100%);
+            border: 1px solid var(--accent);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        .welcome-card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .welcome-card p {
+            color: #94a3b8;
+        }
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        @media (max-width: 768px) {
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+        }
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.5rem;
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .stat-label {
+            color: #64748b;
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+        .section {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            overflow: hidden;
+        }
+        .section-header {
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .section-header h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+        .section-content {
+            padding: 1.5rem;
+        }
+        .scan-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        .scan-card {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .scan-info h4 {
+            font-size: 1rem;
+            margin-bottom: 0.25rem;
+        }
+        .scan-info p {
+            font-size: 0.875rem;
+            color: #64748b;
+        }
+        .scan-meta {
+            text-align: right;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .status-badge.running {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--accent);
+        }
+        .status-badge.completed {
+            background: rgba(74, 222, 128, 0.2);
+            color: var(--success);
+        }
+        .status-badge.failed {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--danger);
+        }
+        .findings-summary {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+        }
+        .finding-type {
+            text-align: center;
+            padding: 1rem;
+            border-radius: 8px;
+            background: var(--bg);
+        }
+        .finding-type.critical {
+            border-left: 3px solid #ef4444;
+        }
+        .finding-type.high {
+            border-left: 3px solid #f97316;
+        }
+        .finding-type.medium {
+            border-left: 3px solid #fbbf24;
+        }
+        .finding-type.low {
+            border-left: 3px solid #22d3ee;
+        }
+        .finding-count {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        .finding-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #64748b;
+        }
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #059669;
+        }
+        .token-display {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            word-break: break-all;
+        }
+        .token-display.masked {
+            color: #64748b;
+        }
+        .footer {
+            text-align: center;
+            padding: 2rem;
+            color: #64748b;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🛡️ <span>Agentic</span> Security</h1>
+        <span class="client-badge" id="clientBadge">Loading...</span>
+    </div>
+    
+    <div class="container">
+        <div class="welcome-card">
+            <h2>Welcome back!</h2>
+            <p>Monitor your security scans and findings from one place.</p>
+        </div>
+        
+        <div class="stats-row">
+            <div class="stat-card">
+                <div class="stat-value" id="activeScans">0</div>
+                <div class="stat-label">Active Scans</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalFindings">0</div>
+                <div class="stat-label">Total Findings</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="criticalCount">0</div>
+                <div class="stat-label">Critical Issues</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="lastScan">-</div>
+                <div class="stat-label">Last Scan</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">
+                <h3>📊 Findings Overview</h3>
+            </div>
+            <div class="section-content">
+                <div class="findings-summary">
+                    <div class="finding-type critical">
+                        <div class="finding-count" id="criticalFindings">0</div>
+                        <div class="finding-label">Critical</div>
+                    </div>
+                    <div class="finding-type high">
+                        <div class="finding-count" id="highFindings">0</div>
+                        <div class="finding-label">High</div>
+                    </div>
+                    <div class="finding-type medium">
+                        <div class="finding-count" id="mediumFindings">0</div>
+                        <div class="finding-label">Medium</div>
+                    </div>
+                    <div class="finding-type low">
+                        <div class="finding-count" id="lowFindings">0</div>
+                        <div class="finding-label">Low</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">
+                <h3>🔄 Recent Scans</h3>
+                <button class="btn btn-primary" onclick="window.open('/?token=' + TOKEN, '_blank')">
+                    Live Dashboard →
+                </button>
+            </div>
+            <div class="section-content">
+                <div class="scan-list" id="scanList">
+                    <div class="empty-state">Loading scans...</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">
+                <h3>🔑 API Access</h3>
+            </div>
+            <div class="section-content">
+                <p style="margin-bottom: 1rem; color: #64748b;">
+                    Use this token to connect to the live dashboard or API:
+                </p>
+                <div class="token-display masked" id="tokenDisplay">
+                    ••••••••••••••••••••••••••••••••
+                </div>
+                <button class="btn btn-primary" style="margin-top: 1rem;" onclick="toggleToken()">
+                    Show Token
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="footer">
+        Client Portal v1.0 | <a href="/" style="color: var(--accent);">Main Dashboard</a>
+    </div>
+    
+    <script>
+        const TOKEN = new URLSearchParams(window.location.search).get('token') || '';
+        let clientId = 'Unknown';
+        let tokenVisible = false;
+        
+        async function fetchWithAuth(url) {
+            const res = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${TOKEN}` }
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+        }
+        
+        async function validateToken() {
+            try {
+                const data = await fetchWithAuth('/api/auth/validate');
+                if (data.valid) {
+                    clientId = data.client_id;
+                    document.getElementById('clientBadge').textContent = clientId;
+                }
+            } catch (e) {
+                document.getElementById('clientBadge').textContent = 'Invalid Token';
+            }
+        }
+        
+        async function loadScans() {
+            try {
+                const data = await fetchWithAuth('/api/scan/status');
+                const scanList = document.getElementById('scanList');
+                
+                // Filter to only this client's scans
+                const scans = Object.values(data.scans || {}).filter(s => 
+                    s.client_id === clientId || !s.client_id
+                );
+                
+                document.getElementById('activeScans').textContent = 
+                    scans.filter(s => s.status === 'running').length;
+                
+                if (scans.length === 0) {
+                    scanList.innerHTML = '<div class="empty-state">No scans yet. Start one to see results here.</div>';
+                    return;
+                }
+                
+                // Update last scan
+                if (scans.length > 0) {
+                    const latest = scans.sort((a, b) => 
+                        new Date(b.started_at || 0) - new Date(a.started_at || 0)
+                    )[0];
+                    document.getElementById('lastScan').textContent = 
+                        formatRelativeTime(latest.started_at);
+                }
+                
+                scanList.innerHTML = scans.slice(0, 5).map(scan => `
+                    <div class="scan-card">
+                        <div class="scan-info">
+                            <h4>${escapeHtml(scan.target || 'Unknown target')}</h4>
+                            <p>Scan ID: ${escapeHtml(scan.scan_id || scan.org_id)}</p>
+                        </div>
+                        <div class="scan-meta">
+                            <span class="status-badge ${scan.status || 'running'}">${scan.status || 'running'}</span>
+                            <p style="font-size: 0.75rem; color: #64748b; margin-top: 0.5rem;">
+                                ${formatTime(scan.started_at)}
+                            </p>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                document.getElementById('scanList').innerHTML = 
+                    `<div class="empty-state">Error loading scans</div>`;
+            }
+        }
+        
+        async function loadStats() {
+            try {
+                const data = await fetchWithAuth('/api/stats');
+                document.getElementById('criticalFindings').textContent = data.critical || 0;
+                document.getElementById('highFindings').textContent = data.high || 0;
+                document.getElementById('mediumFindings').textContent = data.medium || 0;
+                document.getElementById('lowFindings').textContent = data.low || 0;
+                document.getElementById('criticalCount').textContent = data.critical || 0;
+                document.getElementById('totalFindings').textContent = 
+                    (data.critical || 0) + (data.high || 0) + (data.medium || 0) + (data.low || 0);
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        }
+        
+        function toggleToken() {
+            const display = document.getElementById('tokenDisplay');
+            tokenVisible = !tokenVisible;
+            display.textContent = tokenVisible ? TOKEN : '••••••••••••••••••••••••••••••••';
+            display.classList.toggle('masked', !tokenVisible);
+        }
+        
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>"']/g, m => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[m]);
+        }
+        
+        function formatTime(iso) {
+            if (!iso) return '-';
+            return new Date(iso).toLocaleString();
+        }
+        
+        function formatRelativeTime(iso) {
+            if (!iso) return '-';
+            const diff = (Date.now() - new Date(iso)) / 1000;
+            if (diff < 60) return 'Just now';
+            if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+            if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+            return `${Math.floor(diff/86400)}d ago`;
+        }
+        
+        // Initialize
+        validateToken().then(() => {
+            loadScans();
+            loadStats();
+        });
+        
+        // Refresh every 30 seconds
+        setInterval(() => {
+            loadScans();
+            loadStats();
+        }, 30000);
+    </script>
+</body>
+</html>
+"""
+
 
 @app.route('/')
 def dashboard():
@@ -1889,6 +2352,12 @@ def dashboard():
 def admin_dashboard():
     """Serve the admin dashboard HTML."""
     return render_template_string(ADMIN_DASHBOARD_HTML)
+
+
+@app.route('/client')
+def client_portal():
+    """Serve the client self-service portal."""
+    return render_template_string(CLIENT_PORTAL_HTML)
 
 
 @app.route('/api/admin/clients')
