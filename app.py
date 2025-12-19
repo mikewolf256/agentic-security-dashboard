@@ -36,6 +36,14 @@ try:
 except ImportError:
     get_storage = None
 
+# Import JWT auth (optional, falls back to simple token if not available)
+try:
+    from jwt_auth import JWTAuth, get_jwt_auth, jwt_required, admin_required
+    JWT_AUTH_AVAILABLE = True
+except ImportError:
+    JWT_AUTH_AVAILABLE = False
+    print("[Dashboard] JWT auth not available, using simple token auth")
+
 app = Flask(__name__)
 STARTED_AT = datetime.utcnow().isoformat()
 APP_VERSION = os.getenv('APP_VERSION', os.getenv('FLY_IMAGE_REF', 'unknown'))
@@ -1762,6 +1770,95 @@ def clear_kill_signal():
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
     if token != DASHBOARD_TOKEN:
         abort(401)
+
+
+# ---------- JWT Auth Endpoints ----------
+
+@app.route('/api/auth/token', methods=['POST'])
+def create_jwt_token():
+    """Create a JWT token for client access.
+    
+    Requires admin token (DASHBOARD_TOKEN) to issue new tokens.
+    
+    Request body:
+        client_id: str - Client identifier
+        role: str - 'admin', 'client', or 'viewer' (default: 'client')
+        expires_in_hours: int - Token expiry in hours (optional)
+    
+    Returns:
+        token: str - JWT token
+        expires_at: str - Token expiry timestamp
+    """
+    # Require admin auth to issue tokens
+    admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    if admin_token != DASHBOARD_TOKEN:
+        abort(401, 'Admin token required to issue JWT tokens')
+    
+    if not JWT_AUTH_AVAILABLE:
+        abort(501, 'JWT auth not available')
+    
+    data = request.get_json()
+    if not data or not data.get('client_id'):
+        abort(400, 'client_id required')
+    
+    client_id = data['client_id']
+    role = data.get('role', 'client')
+    
+    if role not in ['admin', 'client', 'viewer']:
+        abort(400, 'Invalid role. Must be admin, client, or viewer')
+    
+    # Custom expiry
+    from datetime import timedelta
+    expires_in = None
+    if data.get('expires_in_hours'):
+        expires_in = timedelta(hours=int(data['expires_in_hours']))
+    
+    auth = get_jwt_auth()
+    token = auth.create_token(
+        client_id=client_id,
+        role=role,
+        expires_in=expires_in,
+    )
+    
+    # Decode to get expiry
+    claims = auth.validate_token(token)
+    
+    return jsonify({
+        'token': token,
+        'client_id': client_id,
+        'role': role,
+        'expires_at': claims.exp.isoformat() if claims else None,
+    })
+
+
+@app.route('/api/auth/validate', methods=['GET'])
+def validate_jwt_token():
+    """Validate a JWT token and return claims.
+    
+    Pass token via Authorization: Bearer <token> header or ?token= param.
+    """
+    if not JWT_AUTH_AVAILABLE:
+        abort(501, 'JWT auth not available')
+    
+    auth = get_jwt_auth()
+    token = auth.extract_token_from_request()
+    
+    if not token:
+        return jsonify({'valid': False, 'error': 'No token provided'}), 401
+    
+    claims = auth.validate_token(token)
+    
+    if not claims:
+        return jsonify({'valid': False, 'error': 'Invalid or expired token'}), 401
+    
+    return jsonify({
+        'valid': True,
+        'client_id': claims.client_id,
+        'role': claims.role,
+        'is_admin': claims.is_admin,
+        'permissions': claims.permissions,
+        'expires_at': claims.exp.isoformat(),
+    })
     
     data = request.get_json() or {}
     org_id = data.get('org_id', 'default')
@@ -1778,26 +1875,49 @@ def clear_kill_signal():
 def handle_connect(auth=None):
     """Handle WebSocket connection with token auth and room assignment.
     
+    Authentication methods (checked in order):
+    1. JWT token (preferred for multi-tenant)
+    2. Simple DASHBOARD_TOKEN (legacy/backward compatible)
+    
     Multi-tenant support:
+    - JWT with client_id claim: Auto-join client-specific room
     - client_id param: Join client-specific room for isolated events
-    - admin param: Join 'admin' room to see all events
+    - admin role in JWT: Join 'admin' room to see all events
     - No client_id: Legacy mode, see all events (backward compatible)
     """
     # Debug: log what we receive
     print(f"[DEBUG] Connect attempt - auth={auth}, args={dict(request.args)}", flush=True)
     
     token = request.args.get('token') or (auth.get('token') if auth else None)
-    print(f"[DEBUG] Extracted token={token!r}, expected={DASHBOARD_TOKEN!r}", flush=True)
     
-    if token != DASHBOARD_TOKEN:
-        print(f"[DEBUG] Token mismatch - rejecting connection", flush=True)
-        return False  # Reject connection
+    # Try JWT auth first
+    client_id = None
+    is_admin = False
+    jwt_validated = False
     
-    print(f"[DEBUG] Token valid - accepting connection", flush=True)
+    if JWT_AUTH_AVAILABLE and token:
+        try:
+            jwt_auth = get_jwt_auth()
+            claims = jwt_auth.validate_token(token)
+            if claims:
+                jwt_validated = True
+                client_id = claims.client_id
+                is_admin = claims.is_admin
+                print(f"[DEBUG] JWT valid - client_id={client_id}, role={claims.role}", flush=True)
+        except Exception as e:
+            print(f"[DEBUG] JWT validation error: {e}", flush=True)
     
-    # Multi-tenant: Join appropriate room(s)
-    client_id = request.args.get('client_id') or (auth.get('client_id') if auth else None)
-    is_admin = request.args.get('admin') == 'true' or (auth.get('admin') if auth else False)
+    # Fall back to simple token auth if JWT didn't validate
+    if not jwt_validated:
+        print(f"[DEBUG] Trying simple token auth, expected={DASHBOARD_TOKEN!r}", flush=True)
+        if token != DASHBOARD_TOKEN:
+            print(f"[DEBUG] Token mismatch - rejecting connection", flush=True)
+            return False  # Reject connection
+        print(f"[DEBUG] Simple token valid - accepting connection", flush=True)
+        
+        # Get client_id/admin from params for simple token auth
+        client_id = request.args.get('client_id') or (auth.get('client_id') if auth else None)
+        is_admin = request.args.get('admin') == 'true' or (auth.get('admin') if auth else False)
     
     if client_id:
         # Client-specific room
