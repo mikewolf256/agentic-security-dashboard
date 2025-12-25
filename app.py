@@ -21,6 +21,7 @@ import json
 import signal
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 from flask import Flask, render_template_string, request, jsonify, abort
 from flask_socketio import SocketIO, emit, join_room, leave_room, rooms
 
@@ -38,11 +39,22 @@ except ImportError:
 
 # Import JWT auth (optional, falls back to simple token if not available)
 try:
-    from jwt_auth import JWTAuth, get_jwt_auth, jwt_required, admin_required
+    from jwt_auth import (
+        JWTAuth, get_jwt_auth, jwt_required, admin_required,
+        permission_required, release_required
+    )
     JWT_AUTH_AVAILABLE = True
 except ImportError:
     JWT_AUTH_AVAILABLE = False
+    permission_required = None
+    release_required = None
     print("[Dashboard] JWT auth not available, using simple token auth")
+
+# Import report status enum from storage
+try:
+    from storage import ReportStatus
+except ImportError:
+    ReportStatus = None
 
 app = Flask(__name__)
 STARTED_AT = datetime.utcnow().isoformat()
@@ -1642,7 +1654,12 @@ ADMIN_DASHBOARD_HTML = """
 <body>
     <div class="header">
         <h1>🔐 Agentic Security Admin</h1>
-        <span class="header-badge">Multi-Tenant Control</span>
+        <div style="display: flex; align-items: center; gap: 16px;">
+            <a href="/admin/reports" style="color: var(--accent); text-decoration: none; padding: 8px 16px; border: 1px solid var(--accent); border-radius: 6px; font-size: 0.85rem;">
+                📋 Manage Reports
+            </a>
+            <span class="header-badge">Multi-Tenant Control</span>
+        </div>
     </div>
     
     <div class="container">
@@ -2342,6 +2359,797 @@ CLIENT_PORTAL_HTML = """
 """
 
 
+# Admin Reports Management HTML
+ADMIN_REPORTS_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>Agentic Security - Report Management</title>
+    <style>
+        :root { 
+            --bg: #0a0e14; 
+            --card: #0f1419; 
+            --text: #e9eef7; 
+            --muted: #8b949e;
+            --accent: #22d3ee;
+            --accent2: #a855f7;
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --danger: #ef4444;
+            --border: #1e293b;
+            --staged: #f59e0b;
+            --approved: #3b82f6;
+            --released: #22c55e;
+            --revoked: #ef4444;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            background: var(--bg); 
+            color: var(--text); 
+            font-family: 'Inter', -apple-system, sans-serif;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, var(--card) 0%, #1a1f2e 100%);
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header-nav {
+            display: flex;
+            gap: 16px;
+        }
+        .header-nav a {
+            color: var(--muted);
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .header-nav a:hover, .header-nav a.active {
+            background: rgba(34, 211, 238, 0.1);
+            color: var(--accent);
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+        .stat-card .count {
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+        .stat-card .label {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin-top: 4px;
+        }
+        .stat-card.staged .count { color: var(--staged); }
+        .stat-card.approved .count { color: var(--approved); }
+        .stat-card.released .count { color: var(--released); }
+        .stat-card.revoked .count { color: var(--revoked); }
+        
+        .filter-bar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .filter-btn {
+            padding: 10px 20px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .filter-btn:hover {
+            border-color: var(--accent);
+        }
+        .filter-btn.active {
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            border-color: transparent;
+        }
+        
+        .reports-grid {
+            display: grid;
+            gap: 16px;
+        }
+        .report-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.2s;
+        }
+        .report-card:hover {
+            border-color: var(--accent);
+        }
+        .report-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 16px;
+        }
+        .report-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+        .report-meta {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin-top: 4px;
+        }
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-badge.staged { background: rgba(245, 158, 11, 0.2); color: var(--staged); }
+        .status-badge.approved { background: rgba(59, 130, 246, 0.2); color: var(--approved); }
+        .status-badge.released { background: rgba(34, 197, 94, 0.2); color: var(--released); }
+        .status-badge.revoked { background: rgba(239, 68, 68, 0.2); color: var(--revoked); }
+        
+        .report-details {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 16px;
+            padding: 16px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+        }
+        .detail-item {
+            text-align: center;
+        }
+        .detail-value {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        .detail-label {
+            color: var(--muted);
+            font-size: 0.75rem;
+            margin-top: 2px;
+        }
+        
+        .report-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            color: white;
+        }
+        .btn-primary:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+        .btn-success {
+            background: var(--success);
+            color: #0a0e14;
+        }
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        .btn-secondary {
+            background: var(--border);
+            color: var(--text);
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.active {
+            display: flex;
+        }
+        .modal {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 500px;
+            width: 90%;
+        }
+        .modal h2 {
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .modal-body {
+            margin-bottom: 24px;
+        }
+        .confirmation-box {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin: 16px 0;
+        }
+        .confirmation-box .label {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin-bottom: 8px;
+        }
+        .confirmation-box .value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            color: var(--accent);
+            background: rgba(0,0,0,0.3);
+            padding: 12px;
+            border-radius: 6px;
+        }
+        .confirmation-input {
+            width: 100%;
+            padding: 12px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            margin-top: 12px;
+        }
+        .confirmation-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px;
+            color: var(--muted);
+        }
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+        
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 16px 24px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            z-index: 1001;
+            animation: slideIn 0.3s ease;
+        }
+        .toast.success { background: var(--success); }
+        .toast.error { background: var(--danger); }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        @media (max-width: 768px) {
+            .stats-bar { grid-template-columns: repeat(2, 1fr); }
+            .report-details { grid-template-columns: repeat(2, 1fr); }
+            .filter-bar { flex-wrap: wrap; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>📋 Report Management</h1>
+        <nav class="header-nav">
+            <a href="/admin">Admin Dashboard</a>
+            <a href="/admin/reports" class="active">Reports</a>
+            <a href="/">Live Scans</a>
+        </nav>
+    </header>
+    
+    <div class="container">
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+            <div class="stat-card staged">
+                <div class="count" id="staged-count">0</div>
+                <div class="label">Awaiting Review</div>
+            </div>
+            <div class="stat-card approved">
+                <div class="count" id="approved-count">0</div>
+                <div class="label">Ready to Release</div>
+            </div>
+            <div class="stat-card released">
+                <div class="count" id="released-count">0</div>
+                <div class="label">Released to Clients</div>
+            </div>
+            <div class="stat-card revoked">
+                <div class="count" id="revoked-count">0</div>
+                <div class="label">Revoked</div>
+            </div>
+        </div>
+        
+        <!-- Filter Bar -->
+        <div class="filter-bar">
+            <button class="filter-btn active" data-filter="pending">⏳ Pending Action</button>
+            <button class="filter-btn" data-filter="STAGED">📝 Staged</button>
+            <button class="filter-btn" data-filter="APPROVED">✅ Approved</button>
+            <button class="filter-btn" data-filter="RELEASED">🚀 Released</button>
+            <button class="filter-btn" data-filter="all">📊 All Reports</button>
+        </div>
+        
+        <!-- Reports Grid -->
+        <div class="reports-grid" id="reports-container">
+            <div class="empty-state">
+                <div>Loading reports...</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Approve Modal -->
+    <div class="modal-overlay" id="approve-modal">
+        <div class="modal">
+            <h2>✅ Approve Report</h2>
+            <div class="modal-body">
+                <p>You are about to approve this report for release:</p>
+                <div class="confirmation-box">
+                    <div class="label">Report</div>
+                    <div class="value" id="approve-report-title">-</div>
+                </div>
+                <div class="confirmation-box">
+                    <div class="label">Client</div>
+                    <div class="value" id="approve-client-id">-</div>
+                </div>
+                <textarea id="approve-notes" class="confirmation-input" 
+                    placeholder="Optional: Add approval notes..." rows="3"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal('approve-modal')">Cancel</button>
+                <button class="btn btn-success" onclick="confirmApprove()">Approve Report</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Release Modal -->
+    <div class="modal-overlay" id="release-modal">
+        <div class="modal">
+            <h2>🚀 Release Report to Client</h2>
+            <div class="modal-body">
+                <p>⚠️ This will make the report visible to the client.</p>
+                <div class="confirmation-box">
+                    <div class="label">Client</div>
+                    <div class="value" id="release-client-id">-</div>
+                </div>
+                <div class="confirmation-box">
+                    <div class="label">Report Title</div>
+                    <div class="value" id="release-report-title">-</div>
+                </div>
+                <div class="confirmation-box">
+                    <div class="label">Report Hash</div>
+                    <div class="value" id="release-hash">-</div>
+                </div>
+                <div class="confirmation-box">
+                    <div class="label">Type this to confirm release:</div>
+                    <div class="value" id="release-confirmation-string">RELEASE xxx 1</div>
+                </div>
+                <input type="text" id="release-confirmation-input" class="confirmation-input" 
+                    placeholder="Type the confirmation string exactly..." autocomplete="off">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal('release-modal')">Cancel</button>
+                <button class="btn btn-primary" id="release-confirm-btn" onclick="confirmRelease()" disabled>
+                    Release to Client
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- View Details Modal -->
+    <div class="modal-overlay" id="details-modal">
+        <div class="modal" style="max-width: 700px;">
+            <h2>📄 Report Details</h2>
+            <div class="modal-body" id="details-content">
+                Loading...
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal('details-modal')">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const token = new URLSearchParams(window.location.search).get('token') || '';
+        let currentFilter = 'pending';
+        let reports = [];
+        let currentReportId = null;
+        
+        function getHeaders() {
+            return {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            };
+        }
+        
+        async function loadReports() {
+            try {
+                const response = await fetch('/api/admin/reports?limit=100', {
+                    headers: getHeaders()
+                });
+                const data = await response.json();
+                reports = data.reports || [];
+                
+                // Update stats
+                const counts = data.status_counts || {};
+                document.getElementById('staged-count').textContent = counts.STAGED || 0;
+                document.getElementById('approved-count').textContent = counts.APPROVED || 0;
+                document.getElementById('released-count').textContent = counts.RELEASED || 0;
+                document.getElementById('revoked-count').textContent = counts.REVOKED || 0;
+                
+                renderReports();
+            } catch (err) {
+                console.error('Failed to load reports:', err);
+                showToast('Failed to load reports', 'error');
+            }
+        }
+        
+        function renderReports() {
+            const container = document.getElementById('reports-container');
+            let filtered = reports;
+            
+            if (currentFilter === 'pending') {
+                filtered = reports.filter(r => r.status === 'STAGED' || r.status === 'APPROVED');
+            } else if (currentFilter !== 'all') {
+                filtered = reports.filter(r => r.status === currentFilter);
+            }
+            
+            if (filtered.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        <div>No reports found</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = filtered.map(r => `
+                <div class="report-card">
+                    <div class="report-header">
+                        <div>
+                            <div class="report-title">${escapeHtml(r.title || 'Untitled Report')}</div>
+                            <div class="report-meta">
+                                ${escapeHtml(r.client_id)} • ${escapeHtml(r.scan_id)} • v${r.version || 1}
+                            </div>
+                        </div>
+                        <span class="status-badge ${r.status.toLowerCase()}">${r.status}</span>
+                    </div>
+                    <div class="report-details">
+                        <div class="detail-item">
+                            <div class="detail-value">${r.findings_count || 0}</div>
+                            <div class="detail-label">Findings</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-value">${formatDate(r.created_at)}</div>
+                            <div class="detail-label">Created</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-value">${r.approved_by || '-'}</div>
+                            <div class="detail-label">Approved By</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-value">${r.released_by || '-'}</div>
+                            <div class="detail-label">Released By</div>
+                        </div>
+                    </div>
+                    <div class="report-actions">
+                        <button class="btn btn-secondary" onclick="viewDetails('${r.report_id}')">
+                            View Details
+                        </button>
+                        ${getActionButtons(r)}
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function getActionButtons(report) {
+            if (report.status === 'STAGED') {
+                return `<button class="btn btn-success" onclick="openApprove('${report.report_id}')">
+                    ✅ Approve
+                </button>`;
+            }
+            if (report.status === 'APPROVED') {
+                return `<button class="btn btn-primary" onclick="openRelease('${report.report_id}')">
+                    🚀 Release to Client
+                </button>`;
+            }
+            if (report.status === 'RELEASED') {
+                return `<button class="btn btn-danger" onclick="revokeReport('${report.report_id}')">
+                    ⛔ Revoke
+                </button>`;
+            }
+            return '';
+        }
+        
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            const d = new Date(dateStr);
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+        
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        
+        // Filter handlers
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentFilter = btn.dataset.filter;
+                renderReports();
+            });
+        });
+        
+        // Modal functions
+        function openModal(id) {
+            document.getElementById(id).classList.add('active');
+        }
+        
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('active');
+            currentReportId = null;
+        }
+        
+        function openApprove(reportId) {
+            const report = reports.find(r => r.report_id === reportId);
+            if (!report) return;
+            
+            currentReportId = reportId;
+            document.getElementById('approve-report-title').textContent = report.title || 'Untitled';
+            document.getElementById('approve-client-id').textContent = report.client_id;
+            document.getElementById('approve-notes').value = '';
+            openModal('approve-modal');
+        }
+        
+        async function confirmApprove() {
+            if (!currentReportId) return;
+            
+            const notes = document.getElementById('approve-notes').value;
+            
+            try {
+                const response = await fetch(`/api/admin/reports/${currentReportId}/approve`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ notes })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showToast('Report approved successfully!', 'success');
+                    closeModal('approve-modal');
+                    loadReports();
+                } else {
+                    showToast(data.error || 'Failed to approve', 'error');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+        
+        async function openRelease(reportId) {
+            currentReportId = reportId;
+            const report = reports.find(r => r.report_id === reportId);
+            if (!report) return;
+            
+            // Get confirmation data
+            try {
+                const response = await fetch(`/api/admin/reports/${reportId}/release-confirm`, {
+                    headers: getHeaders()
+                });
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showToast(data.error || 'Cannot release this report', 'error');
+                    return;
+                }
+                
+                document.getElementById('release-client-id').textContent = data.client_id;
+                document.getElementById('release-report-title').textContent = data.title || 'Untitled';
+                document.getElementById('release-hash').textContent = (data.hash || '').substring(0, 16) + '...';
+                document.getElementById('release-confirmation-string').textContent = data.confirmation_string;
+                document.getElementById('release-confirmation-input').value = '';
+                document.getElementById('release-confirm-btn').disabled = true;
+                
+                openModal('release-modal');
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+        
+        // Enable release button only when confirmation matches
+        document.getElementById('release-confirmation-input').addEventListener('input', (e) => {
+            const expected = document.getElementById('release-confirmation-string').textContent;
+            const btn = document.getElementById('release-confirm-btn');
+            btn.disabled = e.target.value.trim() !== expected;
+        });
+        
+        async function confirmRelease() {
+            if (!currentReportId) return;
+            
+            const confirmation = document.getElementById('release-confirmation-input').value;
+            
+            try {
+                const response = await fetch(`/api/admin/reports/${currentReportId}/release`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ confirmation })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showToast('🚀 Report released to client!', 'success');
+                    closeModal('release-modal');
+                    loadReports();
+                } else {
+                    showToast(data.error || 'Failed to release', 'error');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+        
+        async function revokeReport(reportId) {
+            const reason = prompt('Reason for revoking this report:');
+            if (!reason) return;
+            
+            try {
+                const response = await fetch(`/api/admin/reports/${reportId}/revoke`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ reason })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showToast('Report access revoked', 'success');
+                    loadReports();
+                } else {
+                    showToast(data.error || 'Failed to revoke', 'error');
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+        
+        async function viewDetails(reportId) {
+            try {
+                const response = await fetch(`/api/admin/reports/${reportId}`, {
+                    headers: getHeaders()
+                });
+                const data = await response.json();
+                const report = data.report;
+                const auditLog = data.audit_log || [];
+                
+                document.getElementById('details-content').innerHTML = `
+                    <div class="confirmation-box">
+                        <div class="label">Report ID</div>
+                        <div class="value">${report.report_id}</div>
+                    </div>
+                    <div class="confirmation-box">
+                        <div class="label">Client</div>
+                        <div class="value">${report.client_id}</div>
+                    </div>
+                    <div class="confirmation-box">
+                        <div class="label">Title</div>
+                        <div class="value">${report.title || 'Untitled'}</div>
+                    </div>
+                    <div class="confirmation-box">
+                        <div class="label">Status</div>
+                        <div class="value"><span class="status-badge ${report.status.toLowerCase()}">${report.status}</span></div>
+                    </div>
+                    <div class="confirmation-box">
+                        <div class="label">Hash</div>
+                        <div class="value" style="font-size: 0.8rem; word-break: break-all;">${report.hash || 'N/A'}</div>
+                    </div>
+                    <div class="confirmation-box">
+                        <div class="label">Notes</div>
+                        <div class="value">${report.notes || 'None'}</div>
+                    </div>
+                    <h3 style="margin: 20px 0 12px; color: var(--muted);">Audit Log</h3>
+                    <div style="max-height: 200px; overflow-y: auto;">
+                        ${auditLog.length ? auditLog.map(entry => `
+                            <div style="padding: 8px; border-bottom: 1px solid var(--border); font-size: 0.85rem;">
+                                <strong>${entry.action}</strong> by ${entry.actor}
+                                <span style="color: var(--muted); float: right;">${formatDate(entry.timestamp)}</span>
+                            </div>
+                        `).join('') : '<div style="color: var(--muted);">No audit entries</div>'}
+                    </div>
+                `;
+                openModal('details-modal');
+            } catch (err) {
+                showToast('Error loading details', 'error');
+            }
+        }
+        
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        }
+        
+        // Initial load
+        loadReports();
+        
+        // Refresh every 30 seconds
+        setInterval(loadReports, 30000);
+    </script>
+</body>
+</html>
+"""
+
+
 @app.route('/')
 def dashboard():
     """Serve the dashboard HTML."""
@@ -2358,6 +3166,12 @@ def admin_dashboard():
 def client_portal():
     """Serve the client self-service portal."""
     return render_template_string(CLIENT_PORTAL_HTML)
+
+
+@app.route('/admin/reports')
+def admin_reports():
+    """Serve the admin reports management page."""
+    return render_template_string(ADMIN_REPORTS_HTML)
 
 
 @app.route('/api/admin/clients')
@@ -2964,16 +3778,493 @@ def validate_jwt_token():
         'permissions': claims.permissions,
         'expires_at': claims.exp.isoformat(),
     })
+
+
+# =============================================================================
+# Report Release Workflow Endpoints
+# =============================================================================
+
+@app.route('/api/admin/reports', methods=['GET'])
+def list_admin_reports():
+    """List all reports (admin only).
+    
+    Query params:
+    - status: Filter by status (STAGED, APPROVED, RELEASED, REVOKED)
+    - client_id: Filter by client
+    - limit: Max results (default 50)
+    """
+    # Check auth
+    if not check_auth():
+        abort(401)
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    status = request.args.get('status')
+    client_id = request.args.get('client_id')
+    limit = int(request.args.get('limit', 50))
+    
+    reports = storage.list_reports(client_id=client_id, status=status, limit=limit)
+    
+    # Group by status for summary
+    status_counts = {}
+    for r in storage.list_reports(limit=1000):
+        s = r.get('status', 'UNKNOWN')
+        status_counts[s] = status_counts.get(s, 0) + 1
+    
+    return jsonify({
+        'reports': reports,
+        'total': len(reports),
+        'status_counts': status_counts
+    })
+
+
+@app.route('/api/admin/reports/<report_id>', methods=['GET'])
+def get_admin_report(report_id):
+    """Get report details including audit log (admin only)."""
+    if not check_auth():
+        abort(401)
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    report = storage.get_report(report_id)
+    if not report:
+        return jsonify({'error': 'Report not found'}), 404
+    
+    audit_log = storage.get_report_audit_log(report_id)
+    
+    return jsonify({
+        'report': report,
+        'audit_log': audit_log
+    })
+
+
+@app.route('/api/admin/reports', methods=['POST'])
+def create_report():
+    """Create a new report in STAGED status (admin only).
+    
+    Body:
+    - client_id: Required
+    - scan_id: Required
+    - title: Optional
+    - artifact_paths: Optional dict with pdf/md/json paths
+    - findings_count: Optional
+    - notes: Optional
+    """
+    if not check_auth():
+        abort(401)
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
     
     data = request.get_json() or {}
-    org_id = data.get('org_id', 'default')
     
-    kill_file = KILL_SIGNAL_DIR / f"kill_{org_id}.signal"
-    if kill_file.exists():
-        kill_file.unlink()
-        return jsonify({'status': 'ok', 'message': f'Kill signal cleared for {org_id}'})
+    if not data.get('client_id'):
+        return jsonify({'error': 'client_id is required'}), 400
+    if not data.get('scan_id'):
+        return jsonify({'error': 'scan_id is required'}), 400
     
-    return jsonify({'status': 'ok', 'message': 'No kill signal to clear'})
+    # Get actor from JWT or fallback
+    actor = 'admin'
+    if JWT_AUTH_AVAILABLE:
+        try:
+            auth = get_jwt_auth()
+            token = auth.extract_token_from_request()
+            if token:
+                claims = auth.validate_token(token)
+                if claims:
+                    actor = claims.client_id
+        except:
+            pass
+    
+    data['created_by'] = actor
+    data['ip_address'] = request.remote_addr
+    
+    try:
+        report_id = storage.create_report(data)
+        report = storage.get_report(report_id)
+        
+        return jsonify({
+            'status': 'ok',
+            'report_id': report_id,
+            'report': report
+        }), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/admin/reports/<report_id>/approve', methods=['POST'])
+def approve_report(report_id):
+    """Approve a STAGED report (admin only).
+    
+    Body:
+    - notes: Optional approval notes
+    """
+    if not check_auth():
+        abort(401)
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    report = storage.get_report(report_id)
+    if not report:
+        return jsonify({'error': 'Report not found'}), 404
+    
+    if report.get('status') != 'STAGED':
+        return jsonify({'error': f"Cannot approve report in {report.get('status')} status"}), 400
+    
+    data = request.get_json() or {}
+    actor = _get_actor_from_request()
+    
+    try:
+        storage.update_report_status(
+            report_id=report_id,
+            new_status='APPROVED',
+            actor=actor,
+            ip_address=request.remote_addr,
+            notes=data.get('notes')
+        )
+        
+        updated = storage.get_report(report_id)
+        return jsonify({
+            'status': 'ok',
+            'message': 'Report approved',
+            'report': updated
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/admin/reports/<report_id>/release-confirm', methods=['GET'])
+def get_release_confirmation(report_id):
+    """Get release confirmation data (admin only).
+    
+    Returns the confirmation string that must be typed to release.
+    """
+    if not check_auth():
+        abort(401)
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    report = storage.get_report(report_id)
+    if not report:
+        return jsonify({'error': 'Report not found'}), 404
+    
+    if report.get('status') != 'APPROVED':
+        return jsonify({'error': f"Cannot release report in {report.get('status')} status. Must be APPROVED first."}), 400
+    
+    confirmation = storage.get_report_release_confirmation(report_id)
+    return jsonify(confirmation)
+
+
+@app.route('/api/admin/reports/<report_id>/release', methods=['POST'])
+def release_report(report_id):
+    """Release an APPROVED report to client (requires confirmation).
+    
+    Body:
+    - confirmation: Required - typed confirmation string (e.g. "RELEASE acme_corp 1")
+    """
+    if not check_auth():
+        abort(401)
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    report = storage.get_report(report_id)
+    if not report:
+        return jsonify({'error': 'Report not found'}), 404
+    
+    if report.get('status') != 'APPROVED':
+        return jsonify({'error': f"Cannot release report in {report.get('status')} status. Must be APPROVED first."}), 400
+    
+    data = request.get_json() or {}
+    confirmation = data.get('confirmation')
+    
+    if not confirmation:
+        return jsonify({'error': 'Confirmation string required'}), 400
+    
+    # Verify confirmation
+    if not storage.verify_release_confirmation(report_id, confirmation):
+        expected = storage.get_report_release_confirmation(report_id)
+        return jsonify({
+            'error': 'Confirmation string does not match',
+            'expected_format': 'RELEASE <client_slug> <version>',
+            'hint': f"Expected: {expected.get('confirmation_string')}" if expected else None
+        }), 400
+    
+    actor = _get_actor_from_request()
+    
+    # Optional: Check two-person rule
+    two_person_rule = os.getenv('REPORT_TWO_PERSON_RULE', 'false').lower() == 'true'
+    if two_person_rule and report.get('approved_by') == actor:
+        return jsonify({
+            'error': 'Two-person rule: approver cannot release. A different admin must release.',
+            'approved_by': report.get('approved_by')
+        }), 403
+    
+    try:
+        storage.update_report_status(
+            report_id=report_id,
+            new_status='RELEASED',
+            actor=actor,
+            ip_address=request.remote_addr,
+            notes=data.get('notes')
+        )
+        
+        updated = storage.get_report(report_id)
+        return jsonify({
+            'status': 'ok',
+            'message': 'Report released to client',
+            'report': updated
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/admin/reports/<report_id>/revoke', methods=['POST'])
+def revoke_report(report_id):
+    """Revoke a RELEASED report (admin only).
+    
+    Body:
+    - reason: Required - reason for revocation
+    """
+    if not check_auth():
+        abort(401)
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    report = storage.get_report(report_id)
+    if not report:
+        return jsonify({'error': 'Report not found'}), 404
+    
+    if report.get('status') != 'RELEASED':
+        return jsonify({'error': f"Cannot revoke report in {report.get('status')} status. Must be RELEASED."}), 400
+    
+    data = request.get_json() or {}
+    reason = data.get('reason')
+    
+    if not reason:
+        return jsonify({'error': 'Reason for revocation is required'}), 400
+    
+    actor = _get_actor_from_request()
+    
+    try:
+        storage.update_report_status(
+            report_id=report_id,
+            new_status='REVOKED',
+            actor=actor,
+            ip_address=request.remote_addr,
+            notes=f"Revoked: {reason}"
+        )
+        
+        updated = storage.get_report(report_id)
+        return jsonify({
+            'status': 'ok',
+            'message': 'Report access revoked',
+            'report': updated
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/admin/reports/<report_id>/audit', methods=['GET'])
+def get_report_audit(report_id):
+    """Get audit log for a report (admin only)."""
+    if not check_auth():
+        abort(401)
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    audit_log = storage.get_report_audit_log(report_id)
+    return jsonify({
+        'report_id': report_id,
+        'audit_log': audit_log,
+        'total': len(audit_log)
+    })
+
+
+# =============================================================================
+# Client Portal Report Endpoints
+# =============================================================================
+
+@app.route('/api/portal/reports', methods=['GET'])
+def list_client_reports():
+    """List released reports for the authenticated client."""
+    # Get client_id from JWT
+    client_id = None
+    if JWT_AUTH_AVAILABLE:
+        try:
+            auth = get_jwt_auth()
+            token = auth.extract_token_from_request()
+            if token:
+                claims = auth.validate_token(token)
+                if claims:
+                    client_id = claims.client_id
+        except:
+            pass
+    
+    if not client_id:
+        return jsonify({'error': 'Client authentication required'}), 401
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    # Only return RELEASED reports for this client
+    reports = storage.list_reports(client_id=client_id, status='RELEASED')
+    
+    # Strip internal fields for client view
+    client_reports = []
+    for r in reports:
+        client_reports.append({
+            'report_id': r.get('report_id'),
+            'title': r.get('title'),
+            'scan_id': r.get('scan_id'),
+            'version': r.get('version'),
+            'findings_count': r.get('findings_count'),
+            'released_at': r.get('released_at'),
+            'hash': r.get('hash'),
+        })
+    
+    return jsonify({
+        'reports': client_reports,
+        'total': len(client_reports)
+    })
+
+
+@app.route('/api/portal/reports/<report_id>', methods=['GET'])
+def get_client_report(report_id):
+    """Get a specific released report for the authenticated client."""
+    client_id = _get_client_id_from_request()
+    
+    if not client_id:
+        return jsonify({'error': 'Client authentication required'}), 401
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    report = storage.get_report(report_id)
+    if not report:
+        return jsonify({'error': 'Report not found'}), 404
+    
+    # Security check: verify client_id match AND status is RELEASED
+    if report.get('client_id') != client_id:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    if report.get('status') != 'RELEASED':
+        return jsonify({'error': 'Report not available'}), 404
+    
+    # Log the access
+    actor = _get_actor_from_request()
+    storage.log_report_action(
+        report_id=report_id,
+        action='viewed',
+        actor=actor,
+        ip_address=request.remote_addr,
+        details={'client_id': client_id}
+    )
+    
+    # Return client-safe view
+    return jsonify({
+        'report_id': report.get('report_id'),
+        'title': report.get('title'),
+        'scan_id': report.get('scan_id'),
+        'version': report.get('version'),
+        'findings_count': report.get('findings_count'),
+        'released_at': report.get('released_at'),
+        'hash': report.get('hash'),
+        'artifact_paths': report.get('artifact_paths'),  # For download links
+    })
+
+
+@app.route('/api/portal/reports/<report_id>/download/<artifact_type>', methods=['GET'])
+def download_report(report_id, artifact_type):
+    """Download a report artifact (pdf, md, json).
+    
+    Security: Re-verifies auth and client_id on every download request.
+    """
+    client_id = _get_client_id_from_request()
+    
+    if not client_id:
+        return jsonify({'error': 'Client authentication required'}), 401
+    
+    if not storage:
+        return jsonify({'error': 'Storage not available'}), 503
+    
+    report = storage.get_report(report_id)
+    if not report:
+        return jsonify({'error': 'Report not found'}), 404
+    
+    # Security checks
+    if report.get('client_id') != client_id:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    if report.get('status') != 'RELEASED':
+        return jsonify({'error': 'Report not available'}), 404
+    
+    artifact_paths = report.get('artifact_paths', {})
+    if artifact_type not in artifact_paths:
+        return jsonify({'error': f'Artifact type {artifact_type} not available'}), 404
+    
+    # Log the download
+    actor = _get_actor_from_request()
+    storage.log_report_action(
+        report_id=report_id,
+        action='downloaded',
+        actor=actor,
+        ip_address=request.remote_addr,
+        details={'client_id': client_id, 'artifact_type': artifact_type}
+    )
+    
+    # Return download info (actual file serving depends on your storage backend)
+    # For now, return the path - implement actual file streaming based on your setup
+    artifact_path = artifact_paths[artifact_type]
+    
+    # If using local files, you could stream the file:
+    # from flask import send_file
+    # return send_file(artifact_path, as_attachment=True)
+    
+    # For now, return signed URL info (implement actual signing based on your needs)
+    return jsonify({
+        'status': 'ok',
+        'artifact_type': artifact_type,
+        'artifact_path': artifact_path,
+        'hash': report.get('hash'),
+        'message': 'Implement file streaming based on your storage backend'
+    })
+
+
+def _get_actor_from_request() -> str:
+    """Extract actor (username/client_id) from request."""
+    if JWT_AUTH_AVAILABLE:
+        try:
+            auth = get_jwt_auth()
+            token = auth.extract_token_from_request()
+            if token:
+                claims = auth.validate_token(token)
+                if claims:
+                    return claims.client_id
+        except:
+            pass
+    return 'admin'
+
+
+def _get_client_id_from_request() -> Optional[str]:
+    """Extract client_id from JWT token."""
+    if JWT_AUTH_AVAILABLE:
+        try:
+            auth = get_jwt_auth()
+            token = auth.extract_token_from_request()
+            if token:
+                claims = auth.validate_token(token)
+                if claims:
+                    return claims.client_id
+        except:
+            pass
+    return None
 
 
 @socketio.on('connect')

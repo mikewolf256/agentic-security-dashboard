@@ -69,6 +69,7 @@ class JWTAuth:
     # Default token expiry times by role
     TOKEN_EXPIRY = {
         'admin': timedelta(hours=24),
+        'admin_release': timedelta(hours=24),  # Can approve and release reports
         'client': timedelta(hours=8),
         'viewer': timedelta(hours=4),
         'api': timedelta(days=30),  # Long-lived API tokens
@@ -76,8 +77,15 @@ class JWTAuth:
     
     # Role-based default permissions
     ROLE_PERMISSIONS = {
-        'admin': ['view_all', 'manage_scans', 'kill_scans', 'view_findings', 'export'],
-        'client': ['view_own', 'manage_scans', 'kill_scans', 'view_findings'],
+        'admin': [
+            'view_all', 'manage_scans', 'kill_scans', 'view_findings', 'export',
+            'view_reports', 'approve_reports'
+        ],
+        'admin_release': [
+            'view_all', 'manage_scans', 'kill_scans', 'view_findings', 'export',
+            'view_reports', 'approve_reports', 'release_reports'  # Can release to clients
+        ],
+        'client': ['view_own', 'manage_scans', 'kill_scans', 'view_findings', 'download_reports'],
         'viewer': ['view_own', 'view_findings'],
     }
     
@@ -288,6 +296,52 @@ def client_required(client_id: str):
             return f(*args, **kwargs)
         return decorated
     return decorator
+
+
+def permission_required(permission: str):
+    """Decorator to require a specific permission."""
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            auth = get_jwt_auth()
+            token = auth.extract_token_from_request()
+            
+            if not token:
+                return jsonify({'error': 'Missing authentication token'}), 401
+            
+            claims = auth.validate_token(token)
+            if not claims:
+                return jsonify({'error': 'Invalid or expired token'}), 401
+            
+            if not claims.has_permission(permission):
+                return jsonify({'error': f'Permission denied: {permission} required'}), 403
+            
+            g.jwt_claims = claims
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
+
+
+def release_required(f):
+    """Decorator to require report release permission (admin_release role)."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = get_jwt_auth()
+        token = auth.extract_token_from_request()
+        
+        if not token:
+            return jsonify({'error': 'Missing authentication token'}), 401
+        
+        claims = auth.validate_token(token)
+        if not claims:
+            return jsonify({'error': 'Invalid or expired token'}), 401
+        
+        if not claims.has_permission('release_reports'):
+            return jsonify({'error': 'Release permission required (admin_release role)'}), 403
+        
+        g.jwt_claims = claims
+        return f(*args, **kwargs)
+    return decorated
 
 
 if __name__ == "__main__":

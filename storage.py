@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Persistence Layer for Agentic Security Dashboard
 
-Provides storage backends for scan state, events, and findings.
+Provides storage backends for scan state, events, findings, and reports.
 Supports SQLite (default for Fly.io) and in-memory (development).
 
 Usage:
@@ -16,17 +16,33 @@ Usage:
     
     # Save events
     storage.save_event(event_data)
+    
+    # Report Release Workflow
+    storage.create_report(report_data)
+    storage.list_reports(client_id, status)
+    storage.update_report_status(report_id, status, actor, notes)
 """
 
 import os
 import json
 import sqlite3
 import threading
+import hashlib
+import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from contextlib import contextmanager
+from enum import Enum
+
+
+class ReportStatus(str, Enum):
+    """Report release workflow states."""
+    STAGED = "STAGED"       # Generated, admin-only visible
+    APPROVED = "APPROVED"   # Admin verified, ready for release
+    RELEASED = "RELEASED"   # Client can access
+    REVOKED = "REVOKED"     # Access removed
 
 
 class StorageBackend(ABC):
@@ -80,6 +96,57 @@ class StorageBackend(ABC):
     @abstractmethod
     def update_stats(self, stats: Dict[str, Any]) -> bool:
         """Update dashboard statistics."""
+        pass
+    
+    # Report Release Workflow Methods
+    
+    @abstractmethod
+    def create_report(self, report: Dict[str, Any]) -> str:
+        """Create a new report in STAGED status. Returns report_id."""
+        pass
+    
+    @abstractmethod
+    def get_report(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """Get a report by ID."""
+        pass
+    
+    @abstractmethod
+    def list_reports(
+        self, 
+        client_id: Optional[str] = None, 
+        status: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """List reports, optionally filtered by client_id and/or status."""
+        pass
+    
+    @abstractmethod
+    def update_report_status(
+        self,
+        report_id: str,
+        new_status: str,
+        actor: str,
+        ip_address: Optional[str] = None,
+        notes: Optional[str] = None
+    ) -> bool:
+        """Update report status and log the action."""
+        pass
+    
+    @abstractmethod
+    def get_report_audit_log(self, report_id: str) -> List[Dict[str, Any]]:
+        """Get audit log entries for a report."""
+        pass
+    
+    @abstractmethod
+    def log_report_action(
+        self,
+        report_id: str,
+        action: str,
+        actor: str,
+        ip_address: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Log an action on a report for audit trail."""
         pass
 
 
@@ -173,6 +240,43 @@ class SQLiteStorage(StorageBackend):
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
                 INSERT OR IGNORE INTO stats (id) VALUES (1);
+                
+                -- Reports table (Report Release Workflow)
+                CREATE TABLE IF NOT EXISTS reports (
+                    report_id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    scan_id TEXT NOT NULL,
+                    status TEXT DEFAULT 'STAGED' CHECK (status IN ('STAGED', 'APPROVED', 'RELEASED', 'REVOKED')),
+                    version INTEGER DEFAULT 1,
+                    title TEXT,
+                    artifact_paths JSON,
+                    hash TEXT,
+                    findings_count INTEGER DEFAULT 0,
+                    notes TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    approved_at TEXT,
+                    released_at TEXT,
+                    revoked_at TEXT,
+                    approved_by TEXT,
+                    released_by TEXT,
+                    revoked_by TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_reports_client ON reports(client_id);
+                CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
+                CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at DESC);
+                
+                -- Report Audit Log
+                CREATE TABLE IF NOT EXISTS report_audit_log (
+                    id TEXT PRIMARY KEY,
+                    report_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    ip_address TEXT,
+                    details JSON,
+                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_audit_report ON report_audit_log(report_id);
+                CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON report_audit_log(timestamp DESC);
             """)
         print(f"[Storage] SQLite database initialized at {self.db_path}")
     
@@ -391,6 +495,265 @@ class SQLiteStorage(StorageBackend):
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = 1
             """)
+    
+    # =========================================================================
+    # Report Release Workflow Implementation
+    # =========================================================================
+    
+    def create_report(self, report: Dict[str, Any]) -> str:
+        """Create a new report in STAGED status."""
+        report_id = report.get('report_id') or f"rpt_{uuid.uuid4().hex[:12]}"
+        client_id = report.get('client_id')
+        
+        if not client_id:
+            raise ValueError("client_id is required for report creation")
+        
+        # Calculate hash of artifact if provided
+        artifact_paths = report.get('artifact_paths', {})
+        report_hash = report.get('hash')
+        if not report_hash and artifact_paths.get('pdf'):
+            # Generate placeholder hash from metadata
+            hash_input = f"{client_id}:{report.get('scan_id')}:{datetime.utcnow().isoformat()}"
+            report_hash = hashlib.sha256(hash_input.encode()).hexdigest()
+        
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO reports (
+                    report_id, client_id, scan_id, status, version, title,
+                    artifact_paths, hash, findings_count, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                report_id,
+                client_id,
+                report.get('scan_id', ''),
+                ReportStatus.STAGED.value,
+                report.get('version', 1),
+                report.get('title', f"Security Report - {client_id}"),
+                json.dumps(artifact_paths),
+                report_hash,
+                report.get('findings_count', 0),
+                report.get('notes', '')
+            ))
+            
+            # Log the creation action
+            self.log_report_action(
+                report_id=report_id,
+                action='created',
+                actor=report.get('created_by', 'system'),
+                ip_address=report.get('ip_address'),
+                details={'client_id': client_id, 'scan_id': report.get('scan_id')}
+            )
+        
+        return report_id
+    
+    def get_report(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """Get a report by ID."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM reports WHERE report_id = ?", (report_id,)
+            ).fetchone()
+            if row:
+                report = dict(row)
+                if report.get('artifact_paths'):
+                    try:
+                        report['artifact_paths'] = json.loads(report['artifact_paths'])
+                    except:
+                        pass
+                return report
+        return None
+    
+    def list_reports(
+        self,
+        client_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """List reports, optionally filtered by client_id and/or status."""
+        with self._get_conn() as conn:
+            query = "SELECT * FROM reports WHERE 1=1"
+            params = []
+            
+            if client_id:
+                query += " AND client_id = ?"
+                params.append(client_id)
+            
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+            
+            rows = conn.execute(query, params).fetchall()
+            
+            reports = []
+            for row in rows:
+                report = dict(row)
+                if report.get('artifact_paths'):
+                    try:
+                        report['artifact_paths'] = json.loads(report['artifact_paths'])
+                    except:
+                        pass
+                reports.append(report)
+            return reports
+    
+    def update_report_status(
+        self,
+        report_id: str,
+        new_status: str,
+        actor: str,
+        ip_address: Optional[str] = None,
+        notes: Optional[str] = None
+    ) -> bool:
+        """Update report status and log the action."""
+        # Validate status
+        try:
+            status_enum = ReportStatus(new_status)
+        except ValueError:
+            raise ValueError(f"Invalid status: {new_status}")
+        
+        # Get current report to validate transition
+        report = self.get_report(report_id)
+        if not report:
+            return False
+        
+        current_status = report.get('status')
+        
+        # Validate state transitions
+        valid_transitions = {
+            ReportStatus.STAGED.value: [ReportStatus.APPROVED.value],
+            ReportStatus.APPROVED.value: [ReportStatus.RELEASED.value, ReportStatus.STAGED.value],
+            ReportStatus.RELEASED.value: [ReportStatus.REVOKED.value],
+            ReportStatus.REVOKED.value: [ReportStatus.RELEASED.value],  # Allow re-release
+        }
+        
+        if new_status not in valid_transitions.get(current_status, []):
+            raise ValueError(f"Invalid transition from {current_status} to {new_status}")
+        
+        with self._get_conn() as conn:
+            # Build update based on new status
+            update_fields = ["status = ?"]
+            params = [new_status]
+            
+            if notes:
+                update_fields.append("notes = ?")
+                params.append(notes)
+            
+            if new_status == ReportStatus.APPROVED.value:
+                update_fields.append("approved_at = CURRENT_TIMESTAMP")
+                update_fields.append("approved_by = ?")
+                params.append(actor)
+            elif new_status == ReportStatus.RELEASED.value:
+                update_fields.append("released_at = CURRENT_TIMESTAMP")
+                update_fields.append("released_by = ?")
+                params.append(actor)
+            elif new_status == ReportStatus.REVOKED.value:
+                update_fields.append("revoked_at = CURRENT_TIMESTAMP")
+                update_fields.append("revoked_by = ?")
+                params.append(actor)
+            
+            params.append(report_id)
+            
+            conn.execute(
+                f"UPDATE reports SET {', '.join(update_fields)} WHERE report_id = ?",
+                params
+            )
+            
+            # Log the action
+            action_map = {
+                ReportStatus.APPROVED.value: 'approved',
+                ReportStatus.RELEASED.value: 'released',
+                ReportStatus.REVOKED.value: 'revoked',
+                ReportStatus.STAGED.value: 'returned_to_staged',
+            }
+            
+            self.log_report_action(
+                report_id=report_id,
+                action=action_map.get(new_status, 'status_changed'),
+                actor=actor,
+                ip_address=ip_address,
+                details={
+                    'previous_status': current_status,
+                    'new_status': new_status,
+                    'notes': notes
+                }
+            )
+        
+        return True
+    
+    def get_report_audit_log(self, report_id: str) -> List[Dict[str, Any]]:
+        """Get audit log entries for a report."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM report_audit_log WHERE report_id = ? ORDER BY timestamp DESC",
+                (report_id,)
+            ).fetchall()
+            
+            entries = []
+            for row in rows:
+                entry = dict(row)
+                if entry.get('details'):
+                    try:
+                        entry['details'] = json.loads(entry['details'])
+                    except:
+                        pass
+                entries.append(entry)
+            return entries
+    
+    def log_report_action(
+        self,
+        report_id: str,
+        action: str,
+        actor: str,
+        ip_address: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Log an action on a report for audit trail."""
+        log_id = f"log_{uuid.uuid4().hex[:12]}"
+        
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO report_audit_log (id, report_id, action, actor, ip_address, details)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                log_id,
+                report_id,
+                action,
+                actor,
+                ip_address,
+                json.dumps(details) if details else None
+            ))
+        
+        return True
+    
+    def get_report_release_confirmation(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """Get data needed for release confirmation."""
+        report = self.get_report(report_id)
+        if not report:
+            return None
+        
+        # Generate confirmation string
+        client_slug = report['client_id'].replace(' ', '_').lower()
+        version = report.get('version', 1)
+        confirmation_string = f"RELEASE {client_slug} {version}"
+        
+        return {
+            'report_id': report_id,
+            'client_id': report['client_id'],
+            'client_slug': client_slug,
+            'version': version,
+            'hash': report.get('hash'),
+            'title': report.get('title'),
+            'findings_count': report.get('findings_count', 0),
+            'confirmation_string': confirmation_string
+        }
+    
+    def verify_release_confirmation(self, report_id: str, confirmation: str) -> bool:
+        """Verify the typed confirmation string matches the expected format."""
+        expected = self.get_report_release_confirmation(report_id)
+        if not expected:
+            return False
+        return confirmation.strip() == expected['confirmation_string']
 
 
 class MemoryStorage(StorageBackend):
@@ -400,6 +763,8 @@ class MemoryStorage(StorageBackend):
         self.scans: Dict[str, Dict[str, Any]] = {}
         self.events: List[Dict[str, Any]] = []
         self.findings: List[Dict[str, Any]] = []
+        self.reports: Dict[str, Dict[str, Any]] = {}
+        self.report_audit_log: List[Dict[str, Any]] = []
         self.stats: Dict[str, Any] = {
             'total_scans': 0,
             'total_findings': 0,
@@ -471,6 +836,187 @@ class MemoryStorage(StorageBackend):
             self.scans[scan_id]['status'] = status
             self.scans[scan_id]['completed_at'] = datetime.utcnow().isoformat()
             self.stats['total_scans'] += 1
+    
+    # =========================================================================
+    # Report Release Workflow Implementation (In-Memory)
+    # =========================================================================
+    
+    def create_report(self, report: Dict[str, Any]) -> str:
+        """Create a new report in STAGED status."""
+        report_id = report.get('report_id') or f"rpt_{uuid.uuid4().hex[:12]}"
+        client_id = report.get('client_id')
+        
+        if not client_id:
+            raise ValueError("client_id is required for report creation")
+        
+        hash_input = f"{client_id}:{report.get('scan_id')}:{datetime.utcnow().isoformat()}"
+        report_hash = report.get('hash') or hashlib.sha256(hash_input.encode()).hexdigest()
+        
+        with self._lock:
+            self.reports[report_id] = {
+                'report_id': report_id,
+                'client_id': client_id,
+                'scan_id': report.get('scan_id', ''),
+                'status': ReportStatus.STAGED.value,
+                'version': report.get('version', 1),
+                'title': report.get('title', f"Security Report - {client_id}"),
+                'artifact_paths': report.get('artifact_paths', {}),
+                'hash': report_hash,
+                'findings_count': report.get('findings_count', 0),
+                'notes': report.get('notes', ''),
+                'created_at': datetime.utcnow().isoformat(),
+                'approved_at': None,
+                'released_at': None,
+                'revoked_at': None,
+                'approved_by': None,
+                'released_by': None,
+                'revoked_by': None,
+            }
+        
+        self.log_report_action(
+            report_id=report_id,
+            action='created',
+            actor=report.get('created_by', 'system'),
+            details={'client_id': client_id, 'scan_id': report.get('scan_id')}
+        )
+        
+        return report_id
+    
+    def get_report(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """Get a report by ID."""
+        return self.reports.get(report_id)
+    
+    def list_reports(
+        self,
+        client_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """List reports, optionally filtered."""
+        reports = list(self.reports.values())
+        
+        if client_id:
+            reports = [r for r in reports if r.get('client_id') == client_id]
+        if status:
+            reports = [r for r in reports if r.get('status') == status]
+        
+        return sorted(reports, key=lambda x: x.get('created_at', ''), reverse=True)[:limit]
+    
+    def update_report_status(
+        self,
+        report_id: str,
+        new_status: str,
+        actor: str,
+        ip_address: Optional[str] = None,
+        notes: Optional[str] = None
+    ) -> bool:
+        """Update report status."""
+        if report_id not in self.reports:
+            return False
+        
+        try:
+            status_enum = ReportStatus(new_status)
+        except ValueError:
+            raise ValueError(f"Invalid status: {new_status}")
+        
+        report = self.reports[report_id]
+        current_status = report.get('status')
+        
+        valid_transitions = {
+            ReportStatus.STAGED.value: [ReportStatus.APPROVED.value],
+            ReportStatus.APPROVED.value: [ReportStatus.RELEASED.value, ReportStatus.STAGED.value],
+            ReportStatus.RELEASED.value: [ReportStatus.REVOKED.value],
+            ReportStatus.REVOKED.value: [ReportStatus.RELEASED.value],
+        }
+        
+        if new_status not in valid_transitions.get(current_status, []):
+            raise ValueError(f"Invalid transition from {current_status} to {new_status}")
+        
+        with self._lock:
+            report['status'] = new_status
+            if notes:
+                report['notes'] = notes
+            
+            now = datetime.utcnow().isoformat()
+            if new_status == ReportStatus.APPROVED.value:
+                report['approved_at'] = now
+                report['approved_by'] = actor
+            elif new_status == ReportStatus.RELEASED.value:
+                report['released_at'] = now
+                report['released_by'] = actor
+            elif new_status == ReportStatus.REVOKED.value:
+                report['revoked_at'] = now
+                report['revoked_by'] = actor
+        
+        action_map = {
+            ReportStatus.APPROVED.value: 'approved',
+            ReportStatus.RELEASED.value: 'released',
+            ReportStatus.REVOKED.value: 'revoked',
+            ReportStatus.STAGED.value: 'returned_to_staged',
+        }
+        
+        self.log_report_action(
+            report_id=report_id,
+            action=action_map.get(new_status, 'status_changed'),
+            actor=actor,
+            ip_address=ip_address,
+            details={'previous_status': current_status, 'new_status': new_status, 'notes': notes}
+        )
+        
+        return True
+    
+    def get_report_audit_log(self, report_id: str) -> List[Dict[str, Any]]:
+        """Get audit log entries for a report."""
+        return [e for e in self.report_audit_log if e.get('report_id') == report_id]
+    
+    def log_report_action(
+        self,
+        report_id: str,
+        action: str,
+        actor: str,
+        ip_address: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Log an action on a report."""
+        with self._lock:
+            self.report_audit_log.insert(0, {
+                'id': f"log_{uuid.uuid4().hex[:12]}",
+                'report_id': report_id,
+                'action': action,
+                'actor': actor,
+                'ip_address': ip_address,
+                'details': details,
+                'timestamp': datetime.utcnow().isoformat()
+            })
+        return True
+    
+    def get_report_release_confirmation(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """Get data needed for release confirmation."""
+        report = self.get_report(report_id)
+        if not report:
+            return None
+        
+        client_slug = report['client_id'].replace(' ', '_').lower()
+        version = report.get('version', 1)
+        confirmation_string = f"RELEASE {client_slug} {version}"
+        
+        return {
+            'report_id': report_id,
+            'client_id': report['client_id'],
+            'client_slug': client_slug,
+            'version': version,
+            'hash': report.get('hash'),
+            'title': report.get('title'),
+            'findings_count': report.get('findings_count', 0),
+            'confirmation_string': confirmation_string
+        }
+    
+    def verify_release_confirmation(self, report_id: str, confirmation: str) -> bool:
+        """Verify the typed confirmation string matches."""
+        expected = self.get_report_release_confirmation(report_id)
+        if not expected:
+            return False
+        return confirmation.strip() == expected['confirmation_string']
 
 
 # Global storage instance
